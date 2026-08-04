@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include "nes_emu.h"
 #include "display.h"
+#include "input_serial.h"
 #include "nofrendo.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -308,8 +309,12 @@ esp_err_t nes_emu_run(void)
     printf("\n");
 #endif
 
+    input_serial_init();
+
     s_next_frame = s_stat_t0 = s_frame_t0 = esp_timer_get_time();
     while (1) {
+        /* 端口 0 的手柄在 input_init() 里已经接好了，这里只管更新状态 */
+        input_update(0, input_serial_poll());
         nes_emulate(true);
     }
 
