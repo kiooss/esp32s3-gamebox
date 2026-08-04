@@ -1,0 +1,21 @@
+# ESP-IDF 构建产物
+build/
+
+# sdkconfig 是从 sdkconfig.defaults 生成的，不入库。
+# 所有需要固化的配置（240MHz CPU、1000Hz tick 等）都写在 sdkconfig.defaults 里。
+sdkconfig
+sdkconfig.old
+
+# 本地工具配置
+.claude/
+.DS_Store
+
+# ================== ROM ==================
+#
+# 版权物不入库。开头的 / 是必须的 —— 不带斜杠的 roms/ 会连 main/roms/ 一起匹配掉，
+# 把公有领域的测试 ROM 也误伤。
+/roms/
+/main/roms/smb.nes
+#
+# main/roms/ 下另外三个（SimpleParallaxDemo / full_palette / flowing_palette）
+# 是 blargg 测试套件里的公有领域 ROM，随 nofrendo 分发，保留入库。
