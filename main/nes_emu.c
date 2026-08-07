@@ -24,6 +24,7 @@
 #include "nes_emu.h"
 #include "display.h"
 #include "input_serial.h"
+#include "input_gamepad.h"
 #include "nofrendo.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -317,12 +318,16 @@ esp_err_t nes_emu_run(void)
     printf("\n");
 #endif
 
+    /* 两路输入并存：真手柄 + 串口键盘。串口那路留着当调试后路 ——
+     * 手柄没接、接错脚、或者摇杆方向调不对的时候，还能用键盘把游戏开起来对照。 */
     input_serial_init();
+    input_gamepad_init();
 
     s_next_frame = s_stat_t0 = s_frame_t0 = esp_timer_get_time();
     while (1) {
-        /* 端口 0 的手柄在 input_init() 里已经接好了，这里只管更新状态 */
-        input_update(0, input_serial_poll());
+        /* 端口 0 的手柄在 input_init() 里已经接好了，这里只管更新状态。
+         * 按位或：两路谁按下都算数。 */
+        input_update(0, input_serial_poll() | input_gamepad_poll());
         nes_emulate(true);
     }
 
