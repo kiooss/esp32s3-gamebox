@@ -87,6 +87,13 @@ static void feed(uint8_t c)
 
 void input_serial_init(void)
 {
+    /* 幂等：开机选单和 nes_emu_run() 都会调这个函数。没有这道保护的话
+     * 第二次 uart_driver_install() 返回 ESP_ERR_INVALID_STATE，
+     * 被 ESP_ERROR_CHECK 变成 abort —— 板子起不来。 */
+    static bool done;
+    if (done) return;
+    done = true;
+
     /* 只装驱动，不动波特率和引脚 —— bootloader 已经把 UART0 配好了。
      * printf 走的是另一条（轮询 TX FIFO）路径，和这个驱动共存没问题。 */
     ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, RX_BUF, 0, 0, NULL, 0));

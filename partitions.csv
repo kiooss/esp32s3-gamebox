@@ -1,0 +1,19 @@
+# ESP32-S3-WROOM-1-N16R8：16 MB flash
+#
+# 相比 IDF 内置的 partitions_singleapp.csv，只多了最后一行 roms 分区。
+# app 分区保持 1 MB —— 固件本体约 400 KB，还剩一半，没必要撑大。
+#
+# roms 分区放全部游戏（现在 21 个共 3.1 MB），留一倍余量。里面不是文件系统，
+# 是 tools/pack_roms.py 生成的自定义镜像：一张定长目录表 + 拼接的 ROM 数据。
+# 这样 main/rom_store.c 能直接 mmap，ROM 指针原样喂给 nofrendo，走的还是
+# flash cache —— 和以前 EMBED_FILES 的路径一样快，也不多占一分 RAM。
+#
+# 子类型 0x40 是「自定义 data」，故意不用 spiffs/littlefs：那些子类型会让
+# 工具链以为该跑文件系统检查。0x40 落在 IDF 给应用自定义留的范围里。
+#
+# 用到 5.1 MB，剩 11 MB 空着（以后加 OTA 或存档都够）。
+# Name,     Type, SubType, Offset,   Size
+nvs,        data, nvs,     0x9000,   0x6000
+phy_init,   data, phy,     0xf000,   0x1000
+factory,    app,  factory, 0x10000,  0x100000
+roms,       data, 0x40,    0x110000, 0x400000

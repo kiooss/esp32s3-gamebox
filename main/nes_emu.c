@@ -34,35 +34,71 @@
 
 static const char *TAG = "nes";
 
-/* ---- 选择跑哪个 ROM ----
+/* ---- 编译期嵌入的回退 ROM ----
  *
- *   0 = smb                 超级马里奥兄弟。mapper 0 (NROM)，PRG 32K + CHR 8K。
- *   1 = SimpleParallaxDemo  视差滚动。要按手柄才动，没接输入时画面静止。
- *   2 = full_palette        铺满全部 64 种 NES 颜色。静态，精确验证调色板转换。
- *   3 = flowing_palette     颜色自己循环流动，不需要输入 —— 验证画面在动用它。
+ * ⚠ 平时换游戏**不用改这里** —— 开机选单（rom_menu.c）会列出 roms 分区里
+ * 全部游戏让你选。这个宏只决定「选单不可用时跑哪个」：roms 分区还没烧过
+ * （`idf.py flash-roms`）、或者镜像坏了的时候，nes_emu_run(NULL,...) 会回退到它。
  *
- * 1~3 是随 nofrendo 测试套件分发的公有领域 ROM，可以留在仓库里。
- * 0 是版权物，由使用者自备，不要提交进仓库。
+ * 留着这条回退路径的理由：选单是新东西，它坏了不该让整块板子玩不了游戏。
+ * 顺便也保住了「只烧固件、不烧 3 MB 的 ROM 分区」这个快速迭代路径。
+ *
+ * 游戏（都在 main/roms/，加新的要同时在 main/CMakeLists.txt 的 EMBED_FILES 里登记）：
+ *
+ *   0 = smb       超级马里奥兄弟   mapper 0 (NROM)   PRG 32K + CHR  8K
+ *   1 = tetris    俄罗斯方块       mapper 1 (MMC1)   PRG 32K + CHR 16K
+ *   2 = contra    魂斗罗           mapper 2 (UxROM)  PRG 128K
+ *   3 = pacman    吃豆人           mapper 0 (NROM)   PRG 16K + CHR  8K
+ *   4 = drmario   马里奥医生       mapper 1 (MMC1)   PRG 32K + CHR 32K
+ *
+ * 测试图形（不是游戏，调显示用的）：
+ *
+ *   5 = SimpleParallaxDemo  视差滚动。要按手柄才动，没接输入时画面静止。
+ *   6 = full_palette        铺满全部 64 种 NES 颜色。静态，精确验证调色板转换。
+ *   7 = flowing_palette     颜色自己循环流动，不需要输入 —— 验证画面在动用它。
+ *
+ * 5~7 是随 nofrendo 测试套件分发的公有领域 ROM，可以留在仓库里。
+ * 0~4 是版权物，由使用者自备，不要提交进仓库（见 .gitignore）。
  */
-#define ROM_CHOICE  0
+#define ROM_CHOICE  2
 
-#if ROM_CHOICE == 0
-extern const uint8_t rom_start[] asm("_binary_smb_nes_start");
-extern const uint8_t rom_end[]   asm("_binary_smb_nes_end");
-#define ROM_NAME "Super Mario Bros."
+/* 符号名是 EMBED_FILES 按文件名生成的：非字母数字全换成下划线，
+ * 所以 `smb.nes` -> `_binary_smb_nes_start`。 */
+#if   ROM_CHOICE == 0
+#define ROM_SYM   smb_nes
+#define ROM_NAME  "Super Mario Bros."
 #elif ROM_CHOICE == 1
-extern const uint8_t rom_start[] asm("_binary_SimpleParallaxDemo_nes_start");
-extern const uint8_t rom_end[]   asm("_binary_SimpleParallaxDemo_nes_end");
-#define ROM_NAME "SimpleParallaxDemo"
+#define ROM_SYM   tetris_nes
+#define ROM_NAME  "Tetris"
 #elif ROM_CHOICE == 2
-extern const uint8_t rom_start[] asm("_binary_full_palette_nes_start");
-extern const uint8_t rom_end[]   asm("_binary_full_palette_nes_end");
-#define ROM_NAME "full_palette"
+#define ROM_SYM   contra_nes
+#define ROM_NAME  "Contra"
+#elif ROM_CHOICE == 3
+#define ROM_SYM   pacman_nes
+#define ROM_NAME  "Pac-Man"
+#elif ROM_CHOICE == 4
+#define ROM_SYM   drmario_nes
+#define ROM_NAME  "Dr. Mario"
+#elif ROM_CHOICE == 5
+#define ROM_SYM   SimpleParallaxDemo_nes
+#define ROM_NAME  "SimpleParallaxDemo"
+#elif ROM_CHOICE == 6
+#define ROM_SYM   full_palette_nes
+#define ROM_NAME  "full_palette"
+#elif ROM_CHOICE == 7
+#define ROM_SYM   flowing_palette_nes
+#define ROM_NAME  "flowing_palette"
 #else
-extern const uint8_t rom_start[] asm("_binary_flowing_palette_nes_start");
-extern const uint8_t rom_end[]   asm("_binary_flowing_palette_nes_end");
-#define ROM_NAME "flowing_palette"
+#error "ROM_CHOICE 超出范围（0~7）"
 #endif
+
+/* 两层展开：外层先把 ROM_SYM 换成真名，内层再拼进字符串。
+ * 少一层的话拼出来的会是字面量 "_binary_ROM_SYM_start"。 */
+#define ROM_ASM(sym, suffix)   ROM_ASM_(sym, suffix)
+#define ROM_ASM_(sym, suffix)  "_binary_" #sym "_" #suffix
+
+extern const uint8_t rom_start[] asm(ROM_ASM(ROM_SYM, start));
+extern const uint8_t rom_end[]   asm(ROM_ASM(ROM_SYM, end));
 
 /* ---- NES 调色板 ----
  *
@@ -238,10 +274,15 @@ esp_err_t nes_emu_prealloc(void)
     return s_vidbuf ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
-esp_err_t nes_emu_run(void)
+esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
 {
-    size_t rom_size = rom_end - rom_start;
-    printf("\nROM: %s  (%u 字节)\n", ROM_NAME, (unsigned)rom_size);
+    /* 没给 ROM 就用编译期嵌进来的那个 —— roms 分区还没烧过时的回退路径。 */
+    if (!rom) {
+        rom      = rom_start;
+        rom_size = rom_end - rom_start;
+        name     = ROM_NAME;
+    }
+    printf("\nROM: %s  (%u 字节)\n", name, (unsigned)rom_size);
 
     /* 黑边只清这一次。两块缓冲都要清，之后每帧只动中间 256x168。 */
     for (int i = 0; i < 2; i++) {
@@ -270,7 +311,7 @@ esp_err_t nes_emu_run(void)
         return ESP_ERR_NO_MEM;
     }
     /* ROM 数据留在 flash 里（走 cache 映射），rom_loadmem 只存指针不拷贝 */
-    rom_t *cart = rom_loadmem((uint8_t *)rom_start, rom_size);
+    rom_t *cart = rom_loadmem((uint8_t *)rom, rom_size);
     if (!cart) {
         ESP_LOGE(TAG, "ROM 解析失败（不是合法的 iNES 文件？）");
         return ESP_FAIL;

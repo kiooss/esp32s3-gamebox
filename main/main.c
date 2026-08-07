@@ -1,7 +1,7 @@
 /*
  * 在 ESP32-S3 + ST7789（240x320）上跑 NES
  *
- * 流程：打印板级信息 -> 初始化屏 -> 启动模拟器（不返回）
+ * 流程：打印板级信息 -> 初始化屏 -> 开机选游戏 -> 启动模拟器（不返回）
  *
  * 接线见 display.h 顶部。换屏或显示不正常时改那里的宏，不用动这个文件。
  * 把 SHOW_DISPLAY_SELFTEST 改成 1 可以在启动模拟器前先跑一遍点屏诊断图。
@@ -17,6 +17,7 @@
 #include "esp_log.h"
 #include "display.h"
 #include "nes_emu.h"
+#include "rom_menu.h"
 
 static const char *TAG = "main";
 
@@ -111,7 +112,14 @@ void app_main(void)
 #endif
     splash();
 
-    if (nes_emu_run() != ESP_OK) {
+    /* 开机选单：从 roms 分区列出全部游戏。分区没烧过就退回编译期嵌入的那个
+     * （传 NULL 让 nes_emu_run 自己取）。 */
+    const uint8_t *rom  = NULL;
+    size_t         size = 0;
+    const char    *name = NULL;
+    rom_menu_pick(&rom, &size, &name);
+
+    if (nes_emu_run(rom, size, name) != ESP_OK) {
         ESP_LOGE(TAG, "模拟器启动失败");
     }
 }

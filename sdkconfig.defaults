@@ -26,3 +26,7 @@ CONFIG_NEWLIB_NANO_FORMAT=n
 # FreeRTOS tick 提到 1000 Hz。默认 100 Hz 意味着 vTaskDelay 最小粒度 10ms，
 # 而 NES 一帧才 16.7ms —— 配速会被抖成锯齿。
 CONFIG_FREERTOS_HZ=1000
+
+# 自定义分区表：多一个 4 MB 的 roms 分区放全部游戏。见 partitions.csv。
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"

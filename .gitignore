@@ -16,6 +16,10 @@ sdkconfig.old
 # 把公有领域的测试 ROM 也误伤。
 /roms/
 /main/roms/smb.nes
+/main/roms/tetris.nes
+/main/roms/contra.nes
+/main/roms/pacman.nes
+/main/roms/drmario.nes
 #
 # main/roms/ 下另外三个（SimpleParallaxDemo / full_palette / flowing_palette）
 # 是 blargg 测试套件里的公有领域 ROM，随 nofrendo 分发，保留入库。

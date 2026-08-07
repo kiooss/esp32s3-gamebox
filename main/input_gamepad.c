@@ -179,6 +179,12 @@ static bool axes_init(void)
 
 void input_gamepad_init(void)
 {
+    /* 幂等：开机选单和 nes_emu_run() 都会调。重复 adc_oneshot_new_unit()
+     * 会返回 ESP_ERR_INVALID_STATE，摇杆就整个废了。 */
+    static bool done;
+    if (done) return;
+    done = true;
+
     s_btn_ok  = buttons_init();
     s_axes_ok = axes_init();
 
