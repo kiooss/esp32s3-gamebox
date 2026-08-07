@@ -11,7 +11,7 @@
  * 改成两块缓冲、推屏丢给核 1 的独立任务之后，主任务画下一帧的同时核 1 在推
  * 上一帧，每帧耗时变成 max(画图, 推屏) 而不是两者之和。
  *
- * 两块缓冲各 320*170*2 = 106 KB，都放内部 SRAM（DMA 可达且比 PSRAM 快）。
+ * 两块缓冲各 256*192*2 = 96 KB，都放内部 SRAM（DMA 可达且比 PSRAM 快）。
  */
 
 #include <string.h>
@@ -31,8 +31,9 @@
 static const char *TAG = "disp";
 
 /* 一次 DMA 传多少行。分条带是为了避开单次传输的长度上限，
- * 同时让 SPI 队列能流水起来。除不尽也没关系，最后一条短一点。 */
-#define BAND_LINES      42
+ * 同时让 SPI 队列能流水起来。除不尽也没关系，最后一条短一点。
+ * 48 是挑过的：192 / 48 = 4 条整带，比除不尽时少一轮 CASET/RASET/RAMWR。 */
+#define BAND_LINES      48
 #define BAND_COUNT      ((DISP_FB_H + BAND_LINES - 1) / BAND_LINES)
 #define BAND_BYTES      (DISP_FB_W * BAND_LINES * 2)
 #define FB_BYTES        (DISP_FB_W * DISP_FB_H * 2)
@@ -146,11 +147,23 @@ esp_err_t display_init(void)
     if (!s_band_done || !s_submit || !s_idle) return ESP_ERR_NO_MEM;
     xSemaphoreGive(s_idle);     /* 开机时推屏任务是空闲的 */
 
+    /* 两块帧缓冲必须都在内部 SRAM，而且这是**硬约束**，不能退到 PSRAM。
+     *
+     * 试过退 PSRAM，不行：spi_master 的 setup_priv_desc() 用 esp_ptr_dma_capable()
+     * 判断缓冲能不能直接 DMA，而那个函数只认内部 DRAM 地址段（SOC_DMA_LOW/HIGH），
+     * PSRAM 指针一律返回 false。于是驱动会**每条带**临时 malloc 一块内部 DMA
+     * 缓冲再 memcpy 过去 —— 每帧多拷一整屏，还要每秒 240 次分配/释放 28 KB。
+     * 数据最后照样落在内部 RAM，等于白绕一圈。
+     *
+     * 所以画布高度是被内部 RAM 反推出来的，不是随便定的，见 display.h。 */
     for (int i = 0; i < 2; i++) {
         s_buf[i] = heap_caps_malloc(FB_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
         if (!s_buf[i]) {
-            ESP_LOGE(TAG, "帧缓冲 %d 分配失败（每块需要 %d 字节内部 DMA 内存）",
-                     i, FB_BYTES);
+            ESP_LOGE(TAG, "帧缓冲 %d 分配失败（每块需要 %d 字节内部 DMA 内存，"
+                          "当前最大空闲块 %u 字节）—— 调小 display.h 的 DISP_FB_H",
+                     i, FB_BYTES,
+                     (unsigned)heap_caps_get_largest_free_block(
+                         MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
             return ESP_ERR_NO_MEM;
         }
         memset(s_buf[i], 0, FB_BYTES);

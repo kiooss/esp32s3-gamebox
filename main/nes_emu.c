@@ -7,11 +7,15 @@
  * 画面怎么放：
  *   NES 输出 256x240，但上下各 8 行是 overscan —— 真电视上看不到，很多游戏
  *   那里就是垃圾数据，所以裁掉，剩 256x224。
- *   屏幕横屏是 320x170，224 放不下。竖着按 3/4 缩：每 4 行丢 1 行，
- *   224 * 3/4 = 168，正好塞进 170。整数运算、不用插值，几乎不花 CPU。
- *   横向 256 不缩（320 装得下），两侧各留 32 像素黑边，像素保持 1:1 最锐利。
+ *   屏幕横屏是 320x240，论面积 224 行放得下，但两块帧缓冲塞不进内部 RAM
+ *   （详细的账在 display.h 里），所以竖向抽行：每 7 行丢 1 行，224 -> 192。
+ *   换屏前那块 320x170 的屏是每 4 行丢 1 行（224 -> 168），现在损失小了不少，
+ *   画面也高了 14%。整数运算、不插值，几乎不花 CPU。
+ *   横向 256 一律不缩，像素 1:1 最锐利。
  *
- * 黑边只在开机时清一次。之后每帧只画 256x168 那块区域，
+ *   居中落点由 display.h 算：左右各 32 列、上下各 24 行黑边。
+ *
+ * 黑边只在开机时清一次。之后每帧只画 256x192 那块区域，
  * 边框区域的内容在两块缓冲里都是黑的，不会被动到。
  */
 
@@ -106,10 +110,14 @@ extern const uint8_t rom_end[]   asm("_binary_flowing_palette_nes_end");
 #define SRC_Y1      232                 /* 不含，共 224 行 */
 #define SRC_W       256
 
-/* 画布就是 NES 画面区本身（display.h 里 DISP_FB_W/H = 256x168），
+/* 竖向抽行：每 KEEP_EVERY 行丢最后 1 行。224 * 6/7 = 192。 */
+#define KEEP_EVERY  7
+
+/* 画布就是 NES 画面区本身（display.h 里 DISP_FB_W/H = 256x192），
  * 居中落在面板上由 display.c 负责，所以这里的绘图坐标从 (0,0) 起。 */
 _Static_assert(DISP_FB_W == SRC_W, "画布宽度要和 NES 画面宽度一致");
-_Static_assert(DISP_FB_H == 168,   "画布高度要和 3/4 缩放后的高度一致");
+_Static_assert(DISP_FB_H == (SRC_Y1 - SRC_Y0) * (KEEP_EVERY - 1) / KEEP_EVERY,
+               "画布高度要和抽行后的行数一致");
 
 #define FRAME_PERIOD_US  (1000000 / 60)
 
@@ -169,10 +177,10 @@ static void blit_frame(uint8_t *vidbuf)
     uint16_t       *fb  = display_fb();
     const uint16_t *pal = s_palette;
 
-    int oy = 0;
+    int oy = 0, run = 0;
     for (int sy = SRC_Y0; sy < SRC_Y1; sy++) {
-        /* 每 4 行丢 1 行 —— 224 行变 168 行 */
-        if ((sy & 3) == 3) continue;
+        /* 每 7 行丢 1 行 —— 224 行变 192 行。用计数器而不是取模，省掉除法。 */
+        if (++run == KEEP_EVERY) { run = 0; continue; }
 
         const uint8_t *src = vidbuf + (size_t)sy * NES_SCREEN_PITCH
                                     + NES_SCREEN_OVERDRAW;

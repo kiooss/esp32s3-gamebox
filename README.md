@@ -1,6 +1,6 @@
 # esp32s3-app2
 
-ESP32-S3-DevKitC-1 兼容板（N16R8）+ 1.9" ST7789 SPI 屏（170×320）。
+ESP32-S3-DevKitC-1 兼容板（N16R8）+ ST7789 SPI 屏（240×320，横屏 320×240）。
 
 **目标**：在这块板上跑 NES 模拟器（Super Mario Bros）。
 
@@ -158,12 +158,15 @@ idf.py -p /dev/cu.usbserial-A5069RR4 flash monitor
 
 | 现象 | 改哪个 |
 |---|---|
-| 画面偏移 / 边缘花条 | `DISP_GAP_X` / `DISP_GAP_Y`（试 35 与 0 互换） |
+| 画面偏移 / 边缘花条 | `DISP_GAP_X` / `DISP_GAP_Y`（满屏 240×320 用 0；170 列的窄屏用 35） |
 | 上下或左右颠倒 | `DISP_MIRROR_X` / `DISP_MIRROR_Y` |
 | 颜色像底片 | `DISP_INVERT_COLOR` |
 | 红蓝互换 | `DISP_BGR_ORDER` |
 | 花屏 / 雪花 | `DISP_SPI_HZ` 降到 40 MHz 或更低 |
-| 分辨率变了 | `DISP_W` / `DISP_H` |
+| 分辨率变了 | `DISP_W` / `DISP_H`，以及画布 `DISP_FB_W` / `DISP_FB_H` |
+
+⚠️ 换屏时 `DISP_GAP_Y` 和 `DISP_H` 要一起改。只改一个的典型症状是：画面能正常显示，
+但整体偏移、并且屏幕有一条边永远刷不到 —— 看着像「边缘被浪费了」。
 
 ## 授权
 
