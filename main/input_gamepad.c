@@ -23,10 +23,14 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include "input_gamepad.h"
+#include "display.h"
 #include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "nofrendo.h"
 
 static const char *TAG = "pad";
@@ -177,6 +181,67 @@ static bool axes_init(void)
     return true;
 }
 
+void input_gamepad_show(void)
+{
+    if (!s_axes_ok) {
+        ESP_LOGW(TAG, "摇杆没起来，跳过可视化");
+        return;
+    }
+
+    /* 画布是 DISP_FB_W x DISP_FB_H = 256x192，纵向要精确排：
+     * 方框 0~149，三行文字 153~187，正好卡在 192 以内。 */
+    const int BOX = 150;
+    const int BX  = (DISP_FB_W - BOX) / 2;
+    const int BY  = 0;
+    const int HC  = BX + BOX / 2, VC = BY + BOX / 2;
+    const int R   = BOX / 2;
+
+    printf("\n摇杆可视化：点跟着手走就说明映射对了。按大按键 A 退出。\n");
+    while (gpio_get_level(PAD_PIN_A) == 0) vTaskDelay(pdMS_TO_TICKS(10));
+
+    while (gpio_get_level(PAD_PIN_A) == 1) {
+        int rx = read_axis(s_ch_x);
+        int ry = read_axis(s_ch_y);
+
+        /* 和 poll() 里同一套方向修正，保证屏上看到的就是游戏收到的 */
+        int ex = rx - s_center_x, ey = ry - s_center_y;
+        if (PAD_SWAP_XY)  { int t = ex; ex = ey; ey = t; }
+        if (PAD_INVERT_X) ex = -ex;
+        if (PAD_INVERT_Y) ey = -ey;
+
+        display_clear(C_BLACK);
+        display_rect(BX, BY, BOX, BOX, C_GRAY);
+        display_hline(BX, VC, BOX, C_GRAY);
+        display_vline(HC, BY, BOX, C_GRAY);
+
+        int px = HC + ex * R / 2000;
+        int py = VC - ey * R / 2000;
+        if (px < BX)           px = BX;
+        if (px > BX + BOX - 1) px = BX + BOX - 1;
+        if (py < BY)           py = BY;
+        if (py > BY + BOX - 1) py = BY + BOX - 1;
+        display_fill_rect(px - 3, py - 3, 7, 7, C_GREEN);
+
+        char line[48];
+        snprintf(line, sizeof(line), "raw %4d %4d", rx, ry);
+        display_text(4, BY + BOX + 3, line, C_WHITE, 1);
+        snprintf(line, sizeof(line), "off %+5d %+5d", ex, ey);
+        display_text(4, BY + BOX + 12, line, C_GRAY, 1);
+
+        uint8_t d = 0;
+        d |= axis_bits(ex, 0, false, NES_PAD_LEFT, NES_PAD_RIGHT, d);
+        d |= axis_bits(ey, 0, false, NES_PAD_DOWN, NES_PAD_UP,    d);
+        snprintf(line, sizeof(line), "%c%c%c%c  A exit",
+                 (d & NES_PAD_UP)    ? 'U' : '-', (d & NES_PAD_DOWN)  ? 'D' : '-',
+                 (d & NES_PAD_LEFT)  ? 'L' : '-', (d & NES_PAD_RIGHT) ? 'R' : '-');
+        display_text(4, BY + BOX + 23, line, C_YELLOW, 2);
+
+        display_flush();
+    }
+    while (gpio_get_level(PAD_PIN_A) == 0) vTaskDelay(pdMS_TO_TICKS(10));
+    printf("退出摇杆可视化\n\n");
+}
+
 void input_gamepad_init(void)
 {
     /* 幂等：开机选单和 nes_emu_run() 都会调。重复 adc_oneshot_new_unit()
@@ -207,6 +272,10 @@ void input_gamepad_init(void)
         printf("  按键没起来（见上面的警告），请用串口 K/J/回车/Tab\n");
     }
     printf("  方向不对就改 input_gamepad.h 里的 PAD_INVERT_X/Y、PAD_SWAP_XY\n\n");
+
+#if PAD_DIAG_SCREEN
+    input_gamepad_show();
+#endif
 }
 
 uint8_t input_gamepad_poll(void)

@@ -74,6 +74,17 @@
 #define PAD_INVERT_Y    false   /* 实测：这块板往上推是电压变大，不用翻 */
 #define PAD_SWAP_XY     false
 
+/* ============ 摇杆可视化 ============
+ *
+ * 改成 1，开机时把摇杆位置实时画到屏上，按大按键 A 退出。
+ *
+ * 画的就是 poll() 用的同一套坐标，所以「点跟着手走」= 映射正确：
+ * 推右点往右、推上点往上。屏下方同时打出两路原始 ADC 读数，查接线时看它 ——
+ * 只推一个方向时应该**只有一个数字大幅变化**，两个一起变就是两路耦合。
+ *
+ * 查完记得改回 0。 */
+#define PAD_DIAG_SCREEN  1
+
 /* 装 GPIO + ADC。必须在开始模拟之前调用一次。
  * 会顺便采一次摇杆的静止位置做中位校准 —— 所以**上电时手别碰摇杆**。
  * 按键和摇杆分别初始化，一边失败不影响另一边（串口日志里会说是哪边）。 */
@@ -82,3 +93,7 @@ void input_gamepad_init(void);
 /* 每帧调一次，返回 NES 手柄位掩码（NES_PAD_* 的组合）。
  * 没调 init()、或者两路都没起来时恒返回 0，可以安全地和别的输入源按位或。 */
 uint8_t input_gamepad_poll(void);
+
+/* 摇杆位置可视化，按大按键 A 退出。需要 display_init() 已经跑过。
+ * PAD_DIAG_SCREEN=1 时 input_gamepad_init() 末尾会自动调它。 */
+void input_gamepad_show(void);
