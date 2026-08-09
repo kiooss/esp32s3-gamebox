@@ -7,16 +7,23 @@
  * 画面怎么放：
  *   NES 输出 256x240，但上下各 8 行是 overscan —— 真电视上看不到，很多游戏
  *   那里就是垃圾数据，所以裁掉，剩 256x224。
- *   屏幕横屏是 320x240，论面积 224 行放得下，但两块帧缓冲塞不进内部 RAM
- *   （详细的账在 display.h 里），所以竖向抽行：每 7 行丢 1 行，224 -> 192。
- *   换屏前那块 320x170 的屏是每 4 行丢 1 行（224 -> 168），现在损失小了不少，
- *   画面也高了 14%。整数运算、不插值，几乎不花 CPU。
- *   横向 256 一律不缩，像素 1:1 最锐利。
+ *   竖向 224 行 1:1 直接用，不再抽行（以前受内部 RAM 限制要每 7 行丢 1 行）。
+ *   横向 256 -> 288，每 8 个源像素输出 9 个，修 NES 的 8:7 像素宽高比。
+ *   为什么是 9:8、为什么不铺满 320，都记在 display.h 的画布那一节。
  *
- *   居中落点由 display.h 算：左右各 32 列、上下各 24 行黑边。
+ *   居中落点由 display.h 算：左右各 16 列、上下各 8 行黑边。
  *
- * 黑边只在开机时清一次。之后每帧只画 256x192 那块区域，
- * 边框区域的内容在两块缓冲里都是黑的，不会被动到。
+ * ---- 双缓冲在这一层 ----
+ *
+ * display.c 没有常驻帧缓冲了，它按条带向上要数据。所以「核 0 算下一帧、
+ * 核 1 推上一帧」的并行必须靠这里的两块 vidbuf 来保证：blit 回调把刚画完
+ * 的那块交给 display，然后立刻 nes_setvidbuf() 换到另一块，nofrendo 下一帧
+ * 就渲染进那块去，两边互不干扰。
+ *
+ * 8 位的 vidbuf 每块 64 KB，两块 128 KB —— 比两块 RGB565 整帧（252 KB）
+ * 便宜一半，这正是能升到 288x224 的原因。
+ *
+ * 黑边只在开机时清一次，之后每帧只推 288x224 那块区域，不会被动到。
  */
 
 #include <string.h>
@@ -147,19 +154,24 @@ extern const uint8_t rom_end[]   asm(ROM_ASM(ROM_SYM, end));
 #define SRC_Y1      232                 /* 不含，共 224 行 */
 #define SRC_W       256
 
-/* 竖向抽行：每 KEEP_EVERY 行丢最后 1 行。224 * 6/7 = 192。 */
-#define KEEP_EVERY  7
+/* 横向 9:8 扩展：每 GROUP_SRC 个源像素输出 GROUP_DST 个。256/8*9 = 288。
+ * 复制点落在 NES 图块（8 像素宽且对齐）的边界上，视觉上最不突兀。 */
+#define GROUP_SRC   8
+#define GROUP_DST   9
 
-/* 画布就是 NES 画面区本身（display.h 里 DISP_FB_W/H = 256x192），
+/* 画布 = NES 可见区竖向 1:1、横向 9:8（display.h 里 DISP_FB_W/H = 288x224）。
  * 居中落在面板上由 display.c 负责，所以这里的绘图坐标从 (0,0) 起。 */
-_Static_assert(DISP_FB_W == SRC_W, "画布宽度要和 NES 画面宽度一致");
-_Static_assert(DISP_FB_H == (SRC_Y1 - SRC_Y0) * (KEEP_EVERY - 1) / KEEP_EVERY,
-               "画布高度要和抽行后的行数一致");
+_Static_assert(DISP_FB_W == SRC_W / GROUP_SRC * GROUP_DST,
+               "画布宽度要等于 NES 画面宽度做完 9:8 扩展的结果");
+_Static_assert(DISP_FB_H == SRC_Y1 - SRC_Y0,
+               "画布高度要和裁掉 overscan 后的行数一致");
+_Static_assert(SRC_W % GROUP_SRC == 0, "源宽度要能被 8 整除，内循环才好展开");
 
 #define FRAME_PERIOD_US  (1000000 / 60)
 
 static uint16_t s_palette[256]; /* 8 位索引 -> RGB565（大端，见 display.h） */
-static uint8_t  *s_vidbuf;      /* NES_SCREEN_PITCH * NES_SCREEN_HEIGHT */
+static uint8_t  *s_vidbuf[2];   /* 各 NES_SCREEN_PITCH * NES_SCREEN_HEIGHT */
+static int       s_draw_idx;    /* nofrendo 当前正渲染进哪一块 */
 
 static int64_t   s_next_frame;
 static int       s_frames;
@@ -171,7 +183,7 @@ static int64_t   s_frame_t0;
  * 调性能或者换硬件之后打开它，能一眼看出瓶颈在哪。 */
 #define DIAG_TIMING  0
 
-/* 诊断用：0=正常, 1=blit 什么都不做, 2=只做调色板转换不推屏 */
+/* 诊断用：0=正常, 1=blit 什么都不做（只测 6502+PPU） */
 static int s_diag_mode;
 
 /* 建调色板：向 nofrendo 要 24 位版本，调完饱和度再转 RGB565。
@@ -206,37 +218,66 @@ static esp_err_t build_palette(void)
     return ESP_OK;
 }
 
+/* 条带回调 —— 跑在**核 1** 上。把 vidbuf 的第 y0..y0+h-1 行（画布坐标）
+ * 查调色板转成 RGB565，同时做横向 9:8 扩展，写进这块条带缓冲。
+ *
+ * 内循环按 8 个源像素一组展开：查 8 次表、写 9 个像素（最后一个重复），
+ * 没有分支也没有取模。 */
+static void nes_strip(uint16_t *strip, int y0, int h, void *ctx)
+{
+    const uint8_t  *vidbuf = ctx;
+    const uint16_t *pal    = s_palette;
+
+    for (int r = 0; r < h; r++) {
+        const uint8_t *src = vidbuf + (size_t)(SRC_Y0 + y0 + r) * NES_SCREEN_PITCH
+                                    + NES_SCREEN_OVERDRAW;
+        uint16_t      *dst = strip + (size_t)r * DISP_FB_W;
+
+        for (int g = SRC_W / GROUP_SRC; g > 0; g--) {
+            uint16_t c0 = pal[src[0]], c1 = pal[src[1]];
+            uint16_t c2 = pal[src[2]], c3 = pal[src[3]];
+            uint16_t c4 = pal[src[4]], c5 = pal[src[5]];
+            uint16_t c6 = pal[src[6]], c7 = pal[src[7]];
+
+            dst[0] = c0; dst[1] = c1; dst[2] = c2; dst[3] = c3;
+            dst[4] = c4; dst[5] = c5; dst[6] = c6; dst[7] = c7;
+            dst[8] = c7;                    /* 复制点落在图块边界上 */
+
+            src += GROUP_SRC;
+            dst += GROUP_DST;
+        }
+    }
+}
+
+/* 把画布整片刷黑（进游戏前擦掉菜单）。绘图原语只在条带回调里有效，
+ * 所以这种「一次性全屏操作」也得包成回调。 */
+static void black_strip(uint16_t *strip, int y0, int h, void *ctx)
+{
+    display_clear(C_BLACK);
+}
+
 /* nofrendo 每模拟完一帧调一次 */
 static void blit_frame(uint8_t *vidbuf)
 {
     if (s_diag_mode == 1) return;
 
-    uint16_t       *fb  = display_fb();
-    const uint16_t *pal = s_palette;
-
-    int oy = 0, run = 0;
-    for (int sy = SRC_Y0; sy < SRC_Y1; sy++) {
-        /* 每 7 行丢 1 行 —— 224 行变 192 行。用计数器而不是取模，省掉除法。 */
-        if (++run == KEEP_EVERY) { run = 0; continue; }
-
-        const uint8_t *src = vidbuf + (size_t)sy * NES_SCREEN_PITCH
-                                    + NES_SCREEN_OVERDRAW;
-        uint16_t      *dst = fb + (size_t)oy * DISP_FB_W;
-
-        for (int x = 0; x < SRC_W; x++) {
-            dst[x] = pal[src[x]];
-        }
-        oy++;
-    }
-
-    if (s_diag_mode == 2) return;
-
+    /* 只统计核 0 这一侧（6502 + PPU）的耗时。转换和推屏都在核 1，
+     * 它们的时间由 display.c 的 DISP_PROFILE 单独报。 */
     s_emu_us += esp_timer_get_time() - s_frame_t0;
-    display_flush();
+
+    /* 把刚渲染完的这块交给核 1 流式推屏，然后立刻换到另一块。
+     *
+     * nes_setvidbuf() 只是个指针交换（nes.c），而 nofrendo 在调完 blit 之后
+     * 本帧就不再碰 vidbuf 了（nes.c 里 blit_func 之后只剩 apu_emulate），
+     * 所以在这里换是安全的 —— 下一帧的 ppu_renderline 会写进新的那块。 */
+    display_stream(nes_strip, vidbuf);
+
+    s_draw_idx ^= 1;
+    nes_setvidbuf(s_vidbuf[s_draw_idx]);
 
     /* ---- 帧率对齐到 60fps ----
-     * display_flush() 只保证不超过屏幕能吃下的速度（满屏约 86fps），
-     * 不等于 NES 的 60fps，所以这里自己配速。 */
+     * display_stream() 只保证不超过屏幕能吃下的速度，不等于 NES 的 60fps，
+     * 所以这里自己配速。 */
     s_next_frame += FRAME_PERIOD_US;
     int64_t now = esp_timer_get_time();
     if (s_next_frame > now) {
@@ -269,9 +310,14 @@ static void blit_frame(uint8_t *vidbuf)
 
 esp_err_t nes_emu_prealloc(void)
 {
-    s_vidbuf = heap_caps_calloc(1, NES_SCREEN_PITCH * NES_SCREEN_HEIGHT,
-                                MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    return s_vidbuf ? ESP_OK : ESP_ERR_NO_MEM;
+    /* 两块：核 0 渲染一块的同时核 1 在读另一块。都必须在内部 RAM ——
+     * vidbuf 是 PPU 逐扫描线读写的最热内存，放 PSRAM 会让渲染从 2ms 涨到 8.5ms。 */
+    for (int i = 0; i < 2; i++) {
+        s_vidbuf[i] = heap_caps_calloc(1, NES_SCREEN_PITCH * NES_SCREEN_HEIGHT,
+                                       MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!s_vidbuf[i]) return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
 }
 
 esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
@@ -284,12 +330,8 @@ esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
     }
     printf("\nROM: %s  (%u 字节)\n", name, (unsigned)rom_size);
 
-    /* 黑边只清这一次。两块缓冲都要清，之后每帧只动中间 256x168。 */
-    for (int i = 0; i < 2; i++) {
-        display_clear(C_BLACK);
-        display_flush();
-    }
-    display_wait_idle();
+    /* 把菜单擦掉。只要一次 —— 没有常驻缓冲了，之后每帧都是现算的。 */
+    display_stream_sync(black_strip, NULL);
 
     if (nofrendo_init(SYS_DETECT, AUDIO_SAMPLE_RATE, false, blit_frame,
                       NULL, NULL) != 0) {
@@ -302,11 +344,11 @@ esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
         return ESP_FAIL;
     }
 
-    /* PPU 逐扫描线写这块（65 KB），是整个模拟里最热的内存。
+    /* PPU 逐扫描线写这两块（各 64 KB），是整个模拟里最热的内存。
      * 放 PSRAM 时实测 PPU 渲染要 8.5 ms/帧，放内部 SRAM 快得多。
-     * 画布缩到 256x168 之后省下的内存正好够它落回内部。 */
-    if (!s_vidbuf) {
-        ESP_LOGE(TAG, "视频缓冲分配失败（需要 %d 字节内部 RAM）",
+     * 去掉两块 96 KB 的 RGB565 帧缓冲之后，内部 RAM 够放两块了。 */
+    if (!s_vidbuf[0] || !s_vidbuf[1]) {
+        ESP_LOGE(TAG, "视频缓冲分配失败（需要 2x%d 字节内部 RAM）",
                  NES_SCREEN_PITCH * NES_SCREEN_HEIGHT);
         return ESP_ERR_NO_MEM;
     }
@@ -326,7 +368,8 @@ esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
      * 先 setvidbuf 再 insertcart 的话缓冲会被清掉，nes_emulate 开头的
      * `draw = draw && nes.vidbuf != NULL` 就恒为 false：画面永远不渲染，
      * blit 回调永远不触发，而且因为不再配速会把看门狗饿死。 */
-    nes_setvidbuf(s_vidbuf);
+    s_draw_idx = 0;
+    nes_setvidbuf(s_vidbuf[s_draw_idx]);
 
     printf("内部 RAM 剩余 %u KB\n",
            (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
@@ -337,11 +380,12 @@ esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
 
 #if DIAG_TIMING
     /* ---- 分段计时诊断：一刀一刀切，定位时间到底花在哪 ---- */
+    /* 注意：调色板转换和推屏现在都在核 1 上，这个循环只量得到核 0 那一侧。
+     * 核 1 的耗时看 display.c 的 DISP_PROFILE 每秒一行的输出。 */
     static const struct { bool draw; int mode; const char *name; } stages[] = {
         { false, 1, "A 只跑 CPU（不渲染不 blit）" },
         { true,  1, "B + PPU 渲染到 vidbuf" },
-        { true,  2, "C + 调色板转换到帧缓冲" },
-        { true,  0, "D + 推屏（完整）" },
+        { true,  0, "C + 提交给核 1（完整）" },
     };
     for (unsigned st = 0; st < sizeof(stages) / sizeof(stages[0]); st++) {
         s_diag_mode = stages[st].mode;

@@ -3,13 +3,13 @@
  *
  * ---- 布局 ----
  *
- * 画布是 256x192（NES 画布尺寸，居中在 320x240 的屏上，见 display.h）。
- * 21 个游戏 x 8px 行距 = 168px，加 12px 标题行 = 180px，剩 12px 边距。
+ * 画布是 288x224（NES 画布尺寸，居中在 320x240 的屏上，见 display.h）。
+ * 21 个游戏 x 8px 行距 = 168px，加 14px 标题行 = 182px，剩 42px 边距。
  *
- * 行距压到 8px 是被内存逼的：撑成整屏 320x240 的话双缓冲要 300 KB 内部 RAM，
- * 而 NES 视频缓冲吃掉 65 KB 之后只剩 52 KB。8px 行距下字高 7px、行间只有
- * 1px 缝，所以光标用**反白**（填充块 + 黑字）而不是箭头 —— 块的边界自己
- * 划出了行的界限，比在密排文本里找箭头清楚。
+ * 8px 行距下字高 7px、行间只有 1px 缝，所以光标用**反白**（填充块 + 黑字）
+ * 而不是箭头 —— 块的边界自己划出了行的界限，比在密排文本里找箭头清楚。
+ * （画布从 192 涨到 224 行之后其实有余量把行距放宽到 9~10px 了，
+ *   但反白光标在宽行距下同样好使，就没动。）
  *
  * ---- 为什么要边沿检测 ----
  *
@@ -47,8 +47,16 @@ static uint8_t poll_input(void)
     return input_serial_poll() | input_gamepad_poll();
 }
 
-static void draw(int count, int sel)
+/* 条带回调：整份绘制列表每帧会被逐条带调用 BAND_COUNT 次，每次只画到落在
+ * 当前条带里的那几行（display.c 的绘图原语自己裁）。菜单只有按键时才重画，
+ * 重复执行这段的开销可以忽略。 */
+typedef struct { int count, sel; } draw_args_t;
+
+static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
 {
+    const draw_args_t *a = ctx;
+    int count = a->count, sel = a->sel;
+
     display_clear(C_BLACK);
 
     char head[32];
@@ -71,8 +79,13 @@ static void draw(int count, int sel)
             display_text(TEXT_X, y, e->name, C_GRAY, 1);
         }
     }
+}
 
-    display_flush();
+/* ctx 指向栈上的 draw_args_t，所以必须用 sync 版本等推完再返回。 */
+static void draw(int count, int sel)
+{
+    draw_args_t a = { .count = count, .sel = sel };
+    display_stream_sync(draw_strip, &a);
 }
 
 bool rom_menu_pick(const uint8_t **data, size_t *size, const char **name)

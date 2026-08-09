@@ -1,17 +1,39 @@
 /*
  * ST7789 显示层实现 —— 基于 ESP-IDF 自带的 esp_lcd 组件
  *
- * 双缓冲 + 核 1 推屏任务。
+ * 条带流式推屏 + 核 1 推屏任务。
  *
- * 为什么要这么做：esp_lcd_panel_draw_bitmap 在发下一条带的 CASET/RASET/RAMWR
- * 之前必须等上一条带的数据传完（命令和数据共用一条 SPI 总线），所以一轮推屏
- * 是**阻塞**的。单缓冲时「画图」和「推屏」只能串行，实测 40MHz 下推屏 21.8ms
- * + 画图 8.5ms = 30.3ms/帧，只有 33fps —— 明明带宽还没跑满。
+ * ---- 为什么不用常驻帧缓冲 ----
  *
- * 改成两块缓冲、推屏丢给核 1 的独立任务之后，主任务画下一帧的同时核 1 在推
- * 上一帧，每帧耗时变成 max(画图, 推屏) 而不是两者之和。
+ * 画布 288x224 的 RGB565 是 126 KB，双缓冲要 252 KB，内部 DMA 内存装不下
+ * （PSRAM 不能直接 DMA，原因见下面 display_init 里的注释）。
  *
- * 两块缓冲各 256*192*2 = 96 KB，都放内部 SRAM（DMA 可达且比 PSRAM 快）。
+ * 所以这里只留两块 288x32 的条带缓冲（各 18 KB）：核 1 把第 N+1 条转换进
+ * 一块的同时，DMA 正在推第 N 条，两者流水。整块画布由调用方提供的
+ * disp_strip_fn 回调按条带现算，不需要落地。
+ *
+ * 双缓冲没有消失，只是下移到了 8 位的 NES vidbuf 那一层（每块 64 KB，比
+ * RGB565 便宜一半）—— 核 0 渲染下一帧、核 1 读上一帧，帧时间仍然是
+ * max(模拟, 推屏) 而不是两者相加。这一点很关键：如果把转换+推送放回核 0，
+ * 每帧就变成「模拟 9ms 首尾相接推屏 14ms」= 23ms，直接超出 60fps 预算。
+ *
+ * ---- 条带切多大 ----
+ *
+ * esp_lcd_panel_draw_bitmap 在发下一条带的 CASET/RASET/RAMWR 之前必须等上
+ * 一条带传完（命令和数据共用一条 SPI 总线），所以每条带的驱动开销是**串行
+ * 叠加**在总线时间上的，不是并行掉的。
+ *
+ * 实测（256x192 = 98304 字节/帧，80MHz，理论 9.83 ms）：
+ *
+ *     条带数   4      8      12     24
+ *     实测   10.34  10.83  11.31  12.78 ms
+ *
+ * 完美线性，斜率 122 us/条带，每帧固定开销约等于 0。122us 远不是命令本身的
+ * 总线时间（11 字节只值 1us），是每次 draw_bitmap 的驱动/ISR/信号量往返。
+ *
+ * 所以条带**越少越快**，只受条带缓冲内存和流水粒度的约束。取 32 行/条：
+ * 224/32 = 7 条整带，开销 0.86 ms，缓冲 2x18 KB。
+ * 若取 16 行会多花 0.86ms，取 8 行多花 2.6ms —— 都不划算。
  */
 
 #include <string.h>
@@ -24,26 +46,35 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
 static const char *TAG = "disp";
 
-/* 一次 DMA 传多少行。分条带是为了避开单次传输的长度上限，
- * 同时让 SPI 队列能流水起来。除不尽也没关系，最后一条短一点。
- * 48 是挑过的：192 / 48 = 4 条整带，比除不尽时少一轮 CASET/RASET/RAMWR。 */
-#define BAND_LINES      48
+/* 一条带多少行。选值理由见文件头的实测表：32 行 -> 224/32 = 7 条整带。 */
+#define BAND_LINES      32
 #define BAND_COUNT      ((DISP_FB_H + BAND_LINES - 1) / BAND_LINES)
 #define BAND_BYTES      (DISP_FB_W * BAND_LINES * 2)
 #define FB_BYTES        (DISP_FB_W * DISP_FB_H * 2)
 
+_Static_assert(BAND_COUNT >= 2, "条带数至少 2，否则流水不起来");
+
+/* 每秒往串口打一行推屏耗时。调条带尺寸/画布尺寸时很有用，平时可以关掉。 */
+#define DISP_PROFILE    1
+
 static esp_lcd_panel_handle_t   s_panel;
 static esp_lcd_panel_io_handle_t s_io;
 
-static uint16_t          *s_buf[2];      /* 两块帧缓冲 */
-static int                s_back;        /* 当前后台缓冲下标，绘图写这块 */
-static uint16_t          *s_sending;     /* 交给推屏任务的那块 */
+static uint16_t          *s_strip[2];    /* 两块条带缓冲，转换/DMA 乒乓 */
+static disp_strip_fn      s_fn;          /* 本帧的绘制回调 */
+static void              *s_ctx;
+
+/* 绘图原语的作用目标：当前正在填的那条带。只在核 1 的回调里有效。 */
+static uint16_t          *s_cur;         /* 当前条带缓冲 */
+static int                s_cur_y0;      /* 它对应画布的起始行 */
+static int                s_cur_h;       /* 它有多少行 */
 
 static SemaphoreHandle_t  s_band_done;   /* 计数：每条带 DMA 传完 +1 */
 static SemaphoreHandle_t  s_submit;      /* 二值：有新帧待推 */
@@ -58,29 +89,62 @@ static bool IRAM_ATTR on_trans_done(esp_lcd_panel_io_handle_t io,
     return hp == pdTRUE;
 }
 
-/* 推屏任务：钉在核 1，把整帧切成条带排进 SPI 队列，等全部传完再报空闲。
- * 这期间核 0 的调用方可以自由地画下一帧。 */
+/* 推屏任务：钉在核 1。逐条带调用绘制回调、排进 SPI 队列，全部传完再报空闲。
+ * 这期间核 0 的调用方可以自由地算下一帧。 */
 static void blit_task(void *arg)
 {
+#if DISP_PROFILE
+    int64_t acc = 0, t0 = esp_timer_get_time();
+    int     n   = 0;
+#endif
+
     for (;;) {
         xSemaphoreTake(s_submit, portMAX_DELAY);
+#if DISP_PROFILE
+        int64_t push_t0 = esp_timer_get_time();
+#endif
 
         for (int i = 0; i < BAND_COUNT; i++) {
-            int y  = i * BAND_LINES;
-            int h  = DISP_FB_H - y;
+            int y0 = i * BAND_LINES;
+            int h  = DISP_FB_H - y0;
             if (h > BAND_LINES) h = BAND_LINES;
 
-            esp_lcd_panel_draw_bitmap(s_panel,
-                                      DISP_FB_X,         DISP_FB_Y + y,
-                                      DISP_FB_X + DISP_FB_W, DISP_FB_Y + y + h,
-                                      s_sending + (size_t)y * DISP_FB_W);
-        }
-        /* 等这一帧所有条带的 DMA 回执，之后这块缓冲才能被重新绘制 */
-        for (int i = 0; i < BAND_COUNT; i++) {
-            xSemaphoreTake(s_band_done, portMAX_DELAY);
-        }
+            /* 乒乓：第 i 条要写的缓冲正是第 i-2 条用过的那块，
+             * 得先确认它的 DMA 已经回执。
+             *
+             * 实际上 draw_bitmap 内部会等上一条传完才发命令，所以这一步几乎
+             * 总是立刻返回。但那是驱动的实现细节，不是契约 —— 显式等一次让
+             * 「不会覆写正在 DMA 的缓冲」这件事在本地就能看明白，代价为零。 */
+            if (i >= 2) xSemaphoreTake(s_band_done, portMAX_DELAY);
 
-        xSemaphoreGive(s_idle);
+            s_cur    = s_strip[i & 1];
+            s_cur_y0 = y0;
+            s_cur_h  = h;
+            s_fn(s_cur, y0, h, s_ctx);
+
+            esp_lcd_panel_draw_bitmap(s_panel,
+                                      DISP_FB_X,             DISP_FB_Y + y0,
+                                      DISP_FB_X + DISP_FB_W, DISP_FB_Y + y0 + h,
+                                      s_cur);
+        }
+        /* 循环里少收了两条（i=0、1 时没等），这里补上，凑够 BAND_COUNT */
+        xSemaphoreTake(s_band_done, portMAX_DELAY);
+        xSemaphoreTake(s_band_done, portMAX_DELAY);
+
+#if DISP_PROFILE
+        acc += esp_timer_get_time() - push_t0;
+        n++;
+#endif
+        xSemaphoreGive(s_idle);     /* 先放行核 0，printf 别卡在关键路径上 */
+
+#if DISP_PROFILE
+        int64_t now = esp_timer_get_time();
+        if (now - t0 >= 1000000) {
+            printf("推屏 %.2f ms/帧（%d 行/条 x %d 条 = %d 字节，%d 帧）\n",
+                   (float)acc / 1000.0f / n, BAND_LINES, BAND_COUNT, FB_BYTES, n);
+            acc = 0; n = 0; t0 = now;
+        }
+#endif
     }
 }
 
@@ -147,28 +211,26 @@ esp_err_t display_init(void)
     if (!s_band_done || !s_submit || !s_idle) return ESP_ERR_NO_MEM;
     xSemaphoreGive(s_idle);     /* 开机时推屏任务是空闲的 */
 
-    /* 两块帧缓冲必须都在内部 SRAM，而且这是**硬约束**，不能退到 PSRAM。
+    /* 两块条带缓冲必须都在内部 SRAM，这是**硬约束**，不能退到 PSRAM。
      *
      * 试过退 PSRAM，不行：spi_master 的 setup_priv_desc() 用 esp_ptr_dma_capable()
      * 判断缓冲能不能直接 DMA，而那个函数只认内部 DRAM 地址段（SOC_DMA_LOW/HIGH），
      * PSRAM 指针一律返回 false。于是驱动会**每条带**临时 malloc 一块内部 DMA
-     * 缓冲再 memcpy 过去 —— 每帧多拷一整屏，还要每秒 240 次分配/释放 28 KB。
-     * 数据最后照样落在内部 RAM，等于白绕一圈。
+     * 缓冲再 memcpy 过去 —— 数据最后照样落在内部 RAM，等于白绕一圈还多一次拷贝。
      *
-     * 所以画布高度是被内部 RAM 反推出来的，不是随便定的，见 display.h。 */
+     * 好在条带才 18 KB，和以前 96 KB 的整帧缓冲不是一个量级，分配压力小得多。 */
     for (int i = 0; i < 2; i++) {
-        s_buf[i] = heap_caps_malloc(FB_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-        if (!s_buf[i]) {
-            ESP_LOGE(TAG, "帧缓冲 %d 分配失败（每块需要 %d 字节内部 DMA 内存，"
-                          "当前最大空闲块 %u 字节）—— 调小 display.h 的 DISP_FB_H",
-                     i, FB_BYTES,
+        s_strip[i] = heap_caps_malloc(BAND_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (!s_strip[i]) {
+            ESP_LOGE(TAG, "条带缓冲 %d 分配失败（每块需要 %d 字节内部 DMA 内存，"
+                          "当前最大空闲块 %u 字节）—— 调小 display.c 的 BAND_LINES",
+                     i, BAND_BYTES,
                      (unsigned)heap_caps_get_largest_free_block(
                          MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
             return ESP_ERR_NO_MEM;
         }
-        memset(s_buf[i], 0, FB_BYTES);
+        memset(s_strip[i], 0, BAND_BYTES);
     }
-    s_back = 0;
 
     backlight_init();
 
@@ -227,13 +289,12 @@ esp_err_t display_init(void)
     }
 
     ESP_LOGI(TAG, "ST7789 就绪 面板%dx%d @ %d MHz, gap(%d,%d), "
-                  "画布%dx%d@(%d,%d), 双缓冲 2x%d KB",
+                  "画布%dx%d@(%d,%d), 条带流式 %d 行x%d 条, 缓冲 2x%d KB",
              DISP_W, DISP_H, DISP_SPI_HZ / 1000000, DISP_GAP_X, DISP_GAP_Y,
-             DISP_FB_W, DISP_FB_H, DISP_FB_X, DISP_FB_Y, FB_BYTES / 1024);
+             DISP_FB_W, DISP_FB_H, DISP_FB_X, DISP_FB_Y,
+             BAND_LINES, BAND_COUNT, BAND_BYTES / 1024);
     return ESP_OK;
 }
-
-uint16_t *display_fb(void) { return s_buf[s_back]; }
 
 void display_wait_idle(void)
 {
@@ -241,38 +302,54 @@ void display_wait_idle(void)
     xSemaphoreGive(s_idle);
 }
 
-void display_flush(void)
+void display_stream(disp_strip_fn fn, void *ctx)
 {
-    /* 等推屏任务把上一帧交出去。这里是唯一的阻塞点，也正好起到帧率节流的作用。 */
+    /* 等推屏任务把上一帧收完。这里是唯一的阻塞点，也正好起到帧率节流的作用。 */
     xSemaphoreTake(s_idle, portMAX_DELAY);
 
-    s_sending = s_buf[s_back];
-    s_back ^= 1;                /* 交换：调用方接着画另一块 */
+    s_fn  = fn;
+    s_ctx = ctx;
 
     xSemaphoreGive(s_submit);
 }
 
-/* ================= 帧缓冲绘图 ================= */
+void display_stream_sync(disp_strip_fn fn, void *ctx)
+{
+    display_stream(fn, ctx);
+    display_wait_idle();
+}
+
+/* ================= 绘图：目标是「当前条带」 =================
+ *
+ * 坐标都是相对整块画布的，落在当前条带之外的行直接丢掉。
+ * 调用方（菜单、诊断画面）因此完全不用知道条带的存在，同一段绘制代码
+ * 被逐条带重复调用就是了。 */
 
 void display_pixel(int x, int y, uint16_t color)
 {
-    if ((unsigned)x >= DISP_FB_W || (unsigned)y >= DISP_FB_H) return;
-    s_buf[s_back][y * DISP_FB_W + x] = color;
+    if ((unsigned)x >= DISP_FB_W) return;
+    int row = y - s_cur_y0;
+    if ((unsigned)row >= (unsigned)s_cur_h) return;
+    s_cur[(size_t)row * DISP_FB_W + x] = color;
 }
 
 void display_fill_rect(int x, int y, int w, int h, uint16_t color)
 {
     if (w <= 0 || h <= 0) return;
-    /* 裁剪到屏内 */
+    /* 先裁到画布 */
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
     if (x + w > DISP_FB_W) w = DISP_FB_W - x;
     if (y + h > DISP_FB_H) h = DISP_FB_H - y;
     if (w <= 0 || h <= 0) return;
 
-    uint16_t *fb = s_buf[s_back];
-    for (int row = 0; row < h; row++) {
-        uint16_t *p = fb + (size_t)(y + row) * DISP_FB_W + x;
+    /* 再裁到当前条带 */
+    int y_lo = y > s_cur_y0 ? y : s_cur_y0;
+    int y_hi = (y + h) < (s_cur_y0 + s_cur_h) ? (y + h) : (s_cur_y0 + s_cur_h);
+    if (y_lo >= y_hi) return;
+
+    for (int yy = y_lo; yy < y_hi; yy++) {
+        uint16_t *p = s_cur + (size_t)(yy - s_cur_y0) * DISP_FB_W + x;
         for (int col = 0; col < w; col++) p[col] = color;
     }
 }

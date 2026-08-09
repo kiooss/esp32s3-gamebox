@@ -181,6 +181,37 @@ static bool axes_init(void)
     return true;
 }
 
+/* 可视化的一帧状态。绘制现在跑在核 1 的条带回调里，所以每帧算出来的东西
+ * 得先收进这个结构体传过去，不能直接闭包捕获。 */
+typedef struct {
+    int     bx, by, box, hc, vc;    /* 方框几何 */
+    int     px, py;                 /* 光点位置 */
+    int     rx, ry, ex, ey;         /* 原始读数 / 去中位后的偏移 */
+    uint8_t d;                      /* 折算出的方向键位 */
+} viz_t;
+
+/* 整份绘制列表会被逐条带调用 BAND_COUNT 次，落在条带外的行由绘图原语自己裁。 */
+static void viz_strip(uint16_t *strip, int y0, int h, void *ctx)
+{
+    const viz_t *v = ctx;
+
+    display_clear(C_BLACK);
+    display_rect(v->bx, v->by, v->box, v->box, C_GRAY);
+    display_hline(v->bx, v->vc, v->box, C_GRAY);
+    display_vline(v->hc, v->by, v->box, C_GRAY);
+    display_fill_rect(v->px - 3, v->py - 3, 7, 7, C_GREEN);
+
+    char line[48];
+    snprintf(line, sizeof(line), "raw %4d %4d", v->rx, v->ry);
+    display_text(4, v->by + v->box + 3, line, C_WHITE, 1);
+    snprintf(line, sizeof(line), "off %+5d %+5d", v->ex, v->ey);
+    display_text(4, v->by + v->box + 12, line, C_GRAY, 1);
+    snprintf(line, sizeof(line), "%c%c%c%c  A exit",
+             (v->d & NES_PAD_UP)   ? 'U' : '-', (v->d & NES_PAD_DOWN)  ? 'D' : '-',
+             (v->d & NES_PAD_LEFT) ? 'L' : '-', (v->d & NES_PAD_RIGHT) ? 'R' : '-');
+    display_text(4, v->by + v->box + 23, line, C_YELLOW, 2);
+}
+
 void input_gamepad_show(void)
 {
     if (!s_axes_ok) {
@@ -188,8 +219,8 @@ void input_gamepad_show(void)
         return;
     }
 
-    /* 画布是 DISP_FB_W x DISP_FB_H = 256x192，纵向要精确排：
-     * 方框 0~149，三行文字 153~187，正好卡在 192 以内。 */
+    /* 画布是 DISP_FB_W x DISP_FB_H = 288x224：
+     * 方框 0~149，三行文字 153~190，下面还剩 34 行余量。 */
     const int BOX = 150;
     const int BX  = (DISP_FB_W - BOX) / 2;
     const int BY  = 0;
@@ -209,34 +240,21 @@ void input_gamepad_show(void)
         if (PAD_INVERT_X) ex = -ex;
         if (PAD_INVERT_Y) ey = -ey;
 
-        display_clear(C_BLACK);
-        display_rect(BX, BY, BOX, BOX, C_GRAY);
-        display_hline(BX, VC, BOX, C_GRAY);
-        display_vline(HC, BY, BOX, C_GRAY);
-
         int px = HC + ex * R / 2000;
         int py = VC - ey * R / 2000;
         if (px < BX)           px = BX;
         if (px > BX + BOX - 1) px = BX + BOX - 1;
         if (py < BY)           py = BY;
         if (py > BY + BOX - 1) py = BY + BOX - 1;
-        display_fill_rect(px - 3, py - 3, 7, 7, C_GREEN);
-
-        char line[48];
-        snprintf(line, sizeof(line), "raw %4d %4d", rx, ry);
-        display_text(4, BY + BOX + 3, line, C_WHITE, 1);
-        snprintf(line, sizeof(line), "off %+5d %+5d", ex, ey);
-        display_text(4, BY + BOX + 12, line, C_GRAY, 1);
 
         uint8_t d = 0;
         d |= axis_bits(ex, 0, false, NES_PAD_LEFT, NES_PAD_RIGHT, d);
         d |= axis_bits(ey, 0, false, NES_PAD_DOWN, NES_PAD_UP,    d);
-        snprintf(line, sizeof(line), "%c%c%c%c  A exit",
-                 (d & NES_PAD_UP)    ? 'U' : '-', (d & NES_PAD_DOWN)  ? 'D' : '-',
-                 (d & NES_PAD_LEFT)  ? 'L' : '-', (d & NES_PAD_RIGHT) ? 'R' : '-');
-        display_text(4, BY + BOX + 23, line, C_YELLOW, 2);
 
-        display_flush();
+        viz_t v = { .bx = BX, .by = BY, .box = BOX, .hc = HC, .vc = VC,
+                    .px = px, .py = py, .rx = rx, .ry = ry,
+                    .ex = ex, .ey = ey, .d = d };
+        display_stream_sync(viz_strip, &v);     /* v 在栈上，必须等推完 */
     }
     while (gpio_get_level(PAD_PIN_A) == 0) vTaskDelay(pdMS_TO_TICKS(10));
     printf("退出摇杆可视化\n\n");

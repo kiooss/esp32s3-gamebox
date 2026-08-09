@@ -42,52 +42,63 @@ static void print_board_info(void)
 }
 
 #if SHOW_DISPLAY_SELFTEST
-/* 点屏诊断图：换屏之后用它确认 gap / 旋转 / 颜色顺序 / 反色是否设对。
- *   白框四边贴满     -> gap 对
+/* 点屏诊断图：换屏之后用它确认旋转 / 颜色顺序 / 反色是否设对。
  *   左上红右上绿左下蓝右下黄 -> 旋转和镜像对
  *   色条 红绿蓝黄青品白灰    -> RGB 顺序对
  *   灰阶左黑右白      -> invert 对
+ *   白框四边贴满**画布**（不是面板）-> 画布落点对
+ *
+ * ⚠ 画的是 288x224 的画布，不是 320x240 的面板 —— 白框贴的是画布边界，
+ * 外面还有 16/8 像素的黑边。要验 gap 得先把 DISP_FB_W/H 临时改成 DISP_W/H。
+ * （以前这里用的是 DISP_W/DISP_H，画布比它小，右边和下边其实被裁掉了。）
  */
-static void screen_diagnostic(void)
+static void diag_strip(uint16_t *strip, int y0, int h, void *ctx)
 {
     display_clear(C_BLACK);
 
     static const uint16_t bars[8] = {
         C_RED, C_GREEN, C_BLUE, C_YELLOW, C_CYAN, C_MAGENTA, C_WHITE, C_GRAY,
     };
-    int bar_w = DISP_W / 8;
+    int bar_w = DISP_FB_W / 8;
     for (int i = 0; i < 8; i++) {
         display_fill_rect(i * bar_w, 24, bar_w, 46, bars[i]);
     }
 
-    for (int x = 0; x < DISP_W; x++) {
-        int v = (x * 255) / (DISP_W - 1);
+    for (int x = 0; x < DISP_FB_W; x++) {
+        int v = (x * 255) / (DISP_FB_W - 1);
         display_fill_rect(x, 78, 1, 30, RGB565(v, v, v));
     }
 
     display_fill_rect(4, 4, 22, 14, C_RED);
-    display_fill_rect(DISP_W - 26, 4, 22, 14, C_GREEN);
-    display_fill_rect(4, DISP_H - 18, 22, 14, C_BLUE);
-    display_fill_rect(DISP_W - 26, DISP_H - 18, 22, 14, C_YELLOW);
+    display_fill_rect(DISP_FB_W - 26, 4, 22, 14, C_GREEN);
+    display_fill_rect(4, DISP_FB_H - 18, 22, 14, C_BLUE);
+    display_fill_rect(DISP_FB_W - 26, DISP_FB_H - 18, 22, 14, C_YELLOW);
 
     display_text(8, 118, "border must touch all 4 edges", C_GRAY, 1);
 
-    display_rect(0, 0, DISP_W, DISP_H, C_WHITE);
-    display_rect(1, 1, DISP_W - 2, DISP_H - 2, C_WHITE);
-    display_rect(2, 2, DISP_W - 4, DISP_H - 4, C_RED);
+    display_rect(0, 0, DISP_FB_W, DISP_FB_H, C_WHITE);
+    display_rect(1, 1, DISP_FB_W - 2, DISP_FB_H - 2, C_WHITE);
+    display_rect(2, 2, DISP_FB_W - 4, DISP_FB_H - 4, C_RED);
+}
 
-    display_flush();
+static void screen_diagnostic(void)
+{
+    display_stream_sync(diag_strip, NULL);
     vTaskDelay(pdMS_TO_TICKS(6000));
 }
 #endif
 
-static void splash(void)
+static void splash_strip(uint16_t *strip, int y0, int h, void *ctx)
 {
     display_clear(C_BLACK);
     display_text(58, 58,  "ESP32-S3  NES", C_WHITE, 2);
     display_text(58, 84,  "nofrendo", C_GRAY, 1);
     display_text(58, 98,  "loading...", C_GRAY, 1);
-    display_flush();
+}
+
+static void splash(void)
+{
+    display_stream_sync(splash_strip, NULL);
     vTaskDelay(pdMS_TO_TICKS(1200));
 }
 
