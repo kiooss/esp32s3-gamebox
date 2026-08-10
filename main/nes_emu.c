@@ -32,6 +32,7 @@
 #include "display.h"
 #include "input_serial.h"
 #include "input_gamepad.h"
+#include "rgb_led.h"
 #include "nofrendo.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -370,6 +371,14 @@ esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
      * blit 回调永远不触发，而且因为不再配速会把看门狗饿死。 */
     s_draw_idx = 0;
     nes_setvidbuf(s_vidbuf[s_draw_idx]);
+
+    /* 到这里 ROM、mapper 和视频缓冲都已就绪，游戏确定能启动后再亮灯。
+     * RGB 失败不影响模拟器主路径，只记日志继续运行。 */
+    esp_err_t rgb_err = rgb_led_start_rainbow();
+    if (rgb_err != ESP_OK) {
+        ESP_LOGW(TAG, "板载 RGB 彩虹效果未启动：%s",
+                 esp_err_to_name(rgb_err));
+    }
 
     printf("内部 RAM 剩余 %u KB\n",
            (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));

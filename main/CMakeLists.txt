@@ -1,6 +1,7 @@
 # 注意：一旦给 main 显式写了 REQUIRES，它就不再自动依赖全部组件了，
 # 所以 display.c / nes_emu.c 用到的驱动都得在这里列全。
 idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
+                            "rgb_led.c"
                             "input_serial.c" "input_gamepad.c"
                             "rom_store.c" "rom_menu.c"
                        INCLUDE_DIRS "."
@@ -11,6 +12,7 @@ idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
                                 esp_driver_gpio
                                 esp_driver_ledc
                                 esp_driver_uart
+                                espressif__led_strip  # 板载可寻址 RGB LED
                                 esp_adc         # 摇杆走 ADC1
                                 esp_timer
                                 spi_flash      # 提供 esp_flash.h

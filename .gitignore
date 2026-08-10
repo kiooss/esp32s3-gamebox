@@ -1,5 +1,6 @@
 # ESP-IDF 构建产物
 build/
+managed_components/
 
 # sdkconfig 是从 sdkconfig.defaults 生成的，不入库。
 # 所有需要固化的配置（240MHz CPU、1000Hz tick 等）都写在 sdkconfig.defaults 里。
