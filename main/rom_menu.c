@@ -4,12 +4,12 @@
  * ---- 布局 ----
  *
  * 画布是 288x224（NES 画布尺寸，居中在 320x240 的屏上，见 display.h）。
- * 21 个游戏 x 8px 行距 = 168px，加 14px 标题行 = 182px，剩 42px 边距。
+ * 每页 13 个游戏 x 14px 行距 = 182px。26 个游戏正好两页；以后继续加 ROM
+ * 也只会自然增加页数，不会把列表画出屏幕。当前页由 sel / PAGE_ROWS 推导，
+ * 不单独保存状态，避免选择项和页码不同步。
  *
- * 8px 行距下字高 7px、行间只有 1px 缝，所以光标用**反白**（填充块 + 黑字）
- * 而不是箭头 —— 块的边界自己划出了行的界限，比在密排文本里找箭头清楚。
- * （画布从 192 涨到 224 行之后其实有余量把行距放宽到 9~10px 了，
- *   但反白光标在宽行距下同样好使，就没动。）
+ * 选中项用青色反白（填充块 + 黑字），比箭头更醒目；标题用 2 倍字，页码和
+ * 操作提示仍用 1 倍字，把有限的 288x224 画布优先留给完整游戏名。
  *
  * ---- 为什么要边沿检测 ----
  *
@@ -34,11 +34,17 @@
 
 static const char *TAG = "menu";
 
-#define TITLE_Y     2
-#define LIST_Y      14      /* 第一行的 y */
-#define ROW_H       8       /* 行距，字高 7px + 1px 缝 */
-#define TEXT_X      8       /* 文字左缩进 */
-#define HL_PAD      2       /* 反白块比文字左右各多出这么多 */
+#define TITLE_Y        2
+#define PAGE_Y         7
+#define HEADER_LINE_Y  20
+#define LIST_Y         25      /* 第一行的 y */
+#define ROW_H          14      /* 7px 字高，上下留白让反白行更容易辨认 */
+#define PAGE_ROWS      13
+#define FOOTER_LINE_Y  208
+#define FOOTER_Y       214
+#define TEXT_X         8       /* 文字左缩进 */
+#define HL_PAD         2       /* 反白块比文字左右各多出这么多 */
+#define C_DIVIDER      RGB565(48, 48, 48)
 
 #define POLL_MS     16      /* 约 60 Hz，和游戏帧率一个量级 */
 
@@ -56,29 +62,46 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
 {
     const draw_args_t *a = ctx;
     int count = a->count, sel = a->sel;
+    int page = sel / PAGE_ROWS;
+    int page_count = (count + PAGE_ROWS - 1) / PAGE_ROWS;
+    int first = page * PAGE_ROWS;
+    int last = first + PAGE_ROWS;
+    if (last > count) last = count;
 
     display_clear(C_BLACK);
 
-    char head[32];
-    snprintf(head, sizeof(head), "SELECT A GAME            %2d", count);
-    display_text(TEXT_X, TITLE_Y, head, C_CYAN, 1);
+    display_text(TEXT_X, TITLE_Y, "GAME SELECT", C_CYAN, 2);
 
-    for (int i = 0; i < count; i++) {
+    char page_text[32];
+    snprintf(page_text, sizeof(page_text), "%d/%d", page + 1, page_count);
+    int page_x = DISP_FB_W - TEXT_X - (int)strlen(page_text) * 6;
+    display_text(page_x, PAGE_Y, page_text, C_WHITE, 1);
+    display_fill_rect(TEXT_X, HEADER_LINE_Y, DISP_FB_W - 2 * TEXT_X, 1,
+                      C_DIVIDER);
+
+    for (int i = first; i < last; i++) {
         const rom_store_entry_t *e = rom_store_entry(i);
         if (!e) break;
-        int y = LIST_Y + i * ROW_H;
+        int y = LIST_Y + (i - first) * ROW_H;
+
+        char line[48];
+        snprintf(line, sizeof(line), "%02d  %s", i + 1, e->name);
 
         if (i == sel) {
-            /* 反白：先铺一条亮块，再在上面写黑字。
+            /* 反白：先铺一条青色块，再在上面写黑字。
              * 块宽铺满画布，这样长短不一的名字看着也是整齐一条。 */
-            display_fill_rect(TEXT_X - HL_PAD, y - 1,
-                              DISP_FB_W - 2 * (TEXT_X - HL_PAD), ROW_H,
-                              C_WHITE);
-            display_text(TEXT_X, y, e->name, C_BLACK, 1);
+            display_fill_rect(TEXT_X - HL_PAD, y - 3,
+                              DISP_FB_W - 2 * (TEXT_X - HL_PAD), ROW_H - 1,
+                              C_CYAN);
+            display_text(TEXT_X, y, line, C_BLACK, 1);
         } else {
-            display_text(TEXT_X, y, e->name, C_GRAY, 1);
+            display_text(TEXT_X, y, line, C_GRAY, 1);
         }
     }
+
+    display_fill_rect(TEXT_X, FOOTER_LINE_Y, DISP_FB_W - 2 * TEXT_X, 1,
+                      C_DIVIDER);
+    display_text(60, FOOTER_Y, "UP/DOWN:SELECT  A/START:PLAY", C_GRAY, 1);
 }
 
 /* ctx 指向栈上的 draw_args_t，所以必须用 sync 版本等推完再返回。 */
@@ -129,7 +152,7 @@ bool rom_menu_pick(const uint8_t **data, size_t *size, const char **name)
         if (edge & NES_PAD_UP)   moved = -1;
         if (edge & NES_PAD_DOWN) moved = +1;
 
-        /* 上下环绕。21 项里从头翻到尾比一格一格挪快得多。 */
+        /* 上下环绕。跨过页边界时 draw() 会按新的 sel 自动切页。 */
         if (moved) {
             sel = (sel + moved + count) % count;
             draw(count, sel);

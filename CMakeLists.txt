@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(esp32s3-app2)
+project(esp32s3-gamebox)
 
 # ---- ROM 分区镜像 ----
 #

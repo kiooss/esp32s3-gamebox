@@ -1,4 +1,4 @@
-# esp32s3-app2
+# esp32s3-gamebox
 
 ESP32-S3-DevKitC-1 兼容板（N16R8）+ ST7789 SPI 屏（240×320，横屏 320×240）。
 
