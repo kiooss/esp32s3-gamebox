@@ -101,7 +101,7 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
 
     display_fill_rect(TEXT_X, FOOTER_LINE_Y, DISP_FB_W - 2 * TEXT_X, 1,
                       C_DIVIDER);
-    display_text(80, FOOTER_Y, "上下选择  A/开始", C_GRAY, 1);
+    display_text(44, FOOTER_Y, "上下选择  左右翻页  A开始", C_GRAY, 1);
 }
 
 /* ctx 指向栈上的 draw_args_t，所以必须用 sync 版本等推完再返回。 */
@@ -146,6 +146,21 @@ bool rom_menu_pick(const uint8_t **data, size_t *size, const char **name)
             *name = e->name;
             printf("选中：%s（%u 字节）\n\n", e->name, (unsigned)e->size);
             return true;
+        }
+
+        /* 左右直接翻一整页，并尽量保留当前行。最后一页不足 10 项时，
+         * 同一行不存在就落到最后一项；页首和页尾之间同样可以环绕。 */
+        if (edge & (NES_PAD_LEFT | NES_PAD_RIGHT)) {
+            int page_count = (count + PAGE_ROWS - 1) / PAGE_ROWS;
+            int page = sel / PAGE_ROWS;
+            int row = sel % PAGE_ROWS;
+            int page_delta = (edge & NES_PAD_LEFT) ? -1 : +1;
+
+            page = (page + page_delta + page_count) % page_count;
+            sel = page * PAGE_ROWS + row;
+            if (sel >= count) sel = count - 1;
+            draw(count, sel);
+            continue;       /* 斜推摇杆时以翻页为准，避免再上下移动一格 */
         }
 
         int moved = 0;
