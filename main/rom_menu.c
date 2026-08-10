@@ -4,12 +4,12 @@
  * ---- 布局 ----
  *
  * 画布是 288x224（NES 画布尺寸，居中在 320x240 的屏上，见 display.h）。
- * 每页 13 个游戏 x 14px 行距 = 182px。26 个游戏正好两页；以后继续加 ROM
+ * 每页 10 个游戏 x 18px 行距 = 180px。30 个游戏正好三页；以后继续加 ROM
  * 也只会自然增加页数，不会把列表画出屏幕。当前页由 sel / PAGE_ROWS 推导，
  * 不单独保存状态，避免选择项和页码不同步。
  *
- * 选中项用青色反白（填充块 + 黑字），比箭头更醒目；标题用 2 倍字，页码和
- * 操作提示仍用 1 倍字，把有限的 288x224 画布优先留给完整游戏名。
+ * 选中项用青色反白（填充块 + 黑字），比箭头更醒目。中文是 16x16 点阵，
+ * 行距留 2px，有限的 288x224 画布仍能同时容纳标题、10 行列表和操作提示。
  *
  * ---- 为什么要边沿检测 ----
  *
@@ -38,10 +38,10 @@ static const char *TAG = "menu";
 #define PAGE_Y         7
 #define HEADER_LINE_Y  20
 #define LIST_Y         25      /* 第一行的 y */
-#define ROW_H          14      /* 7px 字高，上下留白让反白行更容易辨认 */
-#define PAGE_ROWS      13
-#define FOOTER_LINE_Y  208
-#define FOOTER_Y       214
+#define ROW_H          18      /* 16px 中文点阵 + 2px 行距 */
+#define PAGE_ROWS      10
+#define FOOTER_LINE_Y  204
+#define FOOTER_Y       207
 #define TEXT_X         8       /* 文字左缩进 */
 #define HL_PAD         2       /* 反白块比文字左右各多出这么多 */
 #define C_DIVIDER      RGB565(48, 48, 48)
@@ -70,7 +70,7 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
 
     display_clear(C_BLACK);
 
-    display_text(TEXT_X, TITLE_Y, "GAME SELECT", C_CYAN, 2);
+    display_text(TEXT_X, TITLE_Y, "游戏选择", C_CYAN, 1);
 
     char page_text[32];
     snprintf(page_text, sizeof(page_text), "%d/%d", page + 1, page_count);
@@ -90,7 +90,7 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
         if (i == sel) {
             /* 反白：先铺一条青色块，再在上面写黑字。
              * 块宽铺满画布，这样长短不一的名字看着也是整齐一条。 */
-            display_fill_rect(TEXT_X - HL_PAD, y - 3,
+            display_fill_rect(TEXT_X - HL_PAD, y - 1,
                               DISP_FB_W - 2 * (TEXT_X - HL_PAD), ROW_H - 1,
                               C_CYAN);
             display_text(TEXT_X, y, line, C_BLACK, 1);
@@ -101,7 +101,7 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
 
     display_fill_rect(TEXT_X, FOOTER_LINE_Y, DISP_FB_W - 2 * TEXT_X, 1,
                       C_DIVIDER);
-    display_text(60, FOOTER_Y, "UP/DOWN:SELECT  A/START:PLAY", C_GRAY, 1);
+    display_text(80, FOOTER_Y, "上下选择  A/开始", C_GRAY, 1);
 }
 
 /* ctx 指向栈上的 draw_args_t，所以必须用 sync 版本等推完再返回。 */

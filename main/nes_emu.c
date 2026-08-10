@@ -48,7 +48,7 @@ static const char *TAG = "nes";
  * （`idf.py flash-roms`）、或者镜像坏了的时候，nes_emu_run(NULL,...) 会回退到它。
  *
  * 留着这条回退路径的理由：选单是新东西，它坏了不该让整块板子玩不了游戏。
- * 顺便也保住了「只烧固件、不烧 3 MB 的 ROM 分区」这个快速迭代路径。
+ * 顺便也保住了「只烧固件、不烧 8 MB 的 ROM 分区」这个快速迭代路径。
  *
  * 游戏（都在 main/roms/，加新的要同时在 main/CMakeLists.txt 的 EMBED_FILES 里登记）：
  *

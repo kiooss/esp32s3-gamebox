@@ -38,6 +38,7 @@
 
 #include <string.h>
 #include "display.h"
+#include "menu_font.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -430,18 +431,66 @@ static const uint8_t FONT5X7[95][5] = {
     {0x08,0x08,0x2A,0x1C,0x08},                             /* ~   */
 };
 
+/* 菜单标题来自 flash 里的 UTF-8 文件名。这里只解码标准 UTF-8；坏序列每次
+ * 消耗一个字节并画成问号，避免卡在同一个指针上死循环。 */
+static uint32_t utf8_next(const char **text)
+{
+    const uint8_t *s = (const uint8_t *)*text;
+    uint32_t cp;
+
+    if (s[0] < 0x80) {
+        *text = (const char *)(s + 1);
+        return s[0];
+    }
+    if (s[0] >= 0xC2 && s[0] <= 0xDF && (s[1] & 0xC0) == 0x80) {
+        cp = ((uint32_t)(s[0] & 0x1F) << 6) | (s[1] & 0x3F);
+        *text = (const char *)(s + 2);
+        return cp;
+    }
+    if (s[0] >= 0xE0 && s[0] <= 0xEF &&
+        (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80 &&
+        (s[0] != 0xE0 || s[1] >= 0xA0) &&
+        (s[0] != 0xED || s[1] < 0xA0)) {
+        cp = ((uint32_t)(s[0] & 0x0F) << 12) |
+             ((uint32_t)(s[1] & 0x3F) << 6) | (s[2] & 0x3F);
+        *text = (const char *)(s + 3);
+        return cp;
+    }
+
+    *text = (const char *)(s + 1);
+    return '?';
+}
+
 void display_text(int x, int y, const char *s, uint16_t color, int scale)
 {
     if (scale < 1) scale = 1;
 
-    for (int cx = x; *s; s++) {
-        unsigned char ch = (unsigned char)*s;
-        if (ch < 0x20 || ch > 0x7E) ch = '?';
-        const uint8_t *g = FONT5X7[ch - 0x20];
+    int cx = x;
+    while (*s) {
+        uint32_t codepoint = utf8_next(&s);
+        const uint8_t *han = codepoint > 0x7E ? menu_font_glyph(codepoint) : NULL;
+
+        if (han) {
+            for (int row = 0; row < 16; row++) {
+                uint16_t bits = ((uint16_t)han[row * 2] << 8) | han[row * 2 + 1];
+                for (int col = 0; col < 16; col++) {
+                    if (bits & (0x8000u >> col)) {
+                        display_fill_rect(cx + col * scale, y + row * scale,
+                                          scale, scale, color);
+                    }
+                }
+            }
+            cx += 17 * scale;   /* 16 列字形 + 1 列间距 */
+            continue;
+        }
+
+        unsigned char ch = codepoint >= 0x20 && codepoint <= 0x7E
+                         ? (unsigned char)codepoint : '?';
+        const uint8_t *ascii = FONT5X7[ch - 0x20];
 
         for (int col = 0; col < 5; col++) {
             for (int row = 0; row < 7; row++) {
-                if (g[col] & (1 << row)) {
+                if (ascii[col] & (1 << row)) {
                     display_fill_rect(cx + col * scale, y + row * scale,
                                       scale, scale, color);
                 }

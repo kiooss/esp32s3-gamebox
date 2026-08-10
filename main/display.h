@@ -170,5 +170,5 @@ void display_hline(int x, int y, int w, uint16_t color);
 void display_vline(int x, int y, int h, uint16_t color);
 void display_pixel(int x, int y, uint16_t color);
 
-/* 5x7 点阵字符，scale 为整数倍放大。只支持 ASCII 0x20~0x7E */
+/* UTF-8 文字：ASCII 用 5x7，菜单所需汉字用 16x16 子集；scale 为整数倍放大。 */
 void display_text(int x, int y, const char *s, uint16_t color, int scale);

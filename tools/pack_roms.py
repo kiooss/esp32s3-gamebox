@@ -25,7 +25,7 @@ import struct
 import sys
 
 MAGIC = b"NESROMS\0"
-NAME_LEN = 40           # 含结尾 NUL，所以显示名最长 39 字符
+NAME_LEN = 40           # 含结尾 NUL，所以显示名最长 39 字节
 ENTRY_FMT = "<%dsII" % NAME_LEN
 ENTRY_SIZE = struct.calcsize(ENTRY_FMT)
 HEADER_FMT = "<8sI"
@@ -36,17 +36,21 @@ assert ENTRY_SIZE == 48, ENTRY_SIZE
 # ROM 站惯例的标记：(U) (E) (Japan, USA) [!] [!p] (PRG0) 等等。
 # 显示名里不需要，剥掉。
 TAG_RE = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]")
+ORDER_RE = re.compile(r"^\d{2}_")
 
 
 def display_name(filename):
     """`Super Mario Bros. (Japan, USA).nes` -> `Super Mario Bros.`"""
     stem = os.path.splitext(os.path.basename(filename))[0]
-    name = TAG_RE.sub("", stem).strip()
+    name = ORDER_RE.sub("", TAG_RE.sub("", stem)).strip()
     if not name:                        # 整个名字都是标记的极端情况
         name = stem.strip()
-    # 截断留一个字节给 NUL。按字节截 —— 名字里如果有非 ASCII，
-    # 固件的 5x7 字模也画不出来，这里不额外处理。
-    encoded = name.encode("utf-8", "replace")[: NAME_LEN - 1]
+    # 截断留一个字节给 NUL，但不能从 UTF-8 多字节字符中间切断，否则设备端
+    # 会得到坏序列。菜单的中文子集按完整码点查字形。
+    encoded = name.encode("utf-8", "replace")
+    while len(encoded) > NAME_LEN - 1:
+        name = name[:-1]
+        encoded = name.encode("utf-8", "replace")
     return encoded
 
 
@@ -107,11 +111,11 @@ def main():
         print("  %-40s %6.0f KB" % (name.decode("utf-8", "replace"),
                                     len(data) / 1024))
 
-    # 分区是 4 MB（见 partitions.csv）。超了 esptool 会报错，
+    # 分区是 8 MB（见 partitions.csv）。超了 esptool 会报错，
     # 但在这里说清楚更好定位。
-    limit = 4 * 1024 * 1024
+    limit = 8 * 1024 * 1024
     if total > limit:
-        sys.exit("镜像 %.1f MB 超过 roms 分区的 4 MB —— "
+        sys.exit("镜像 %.1f MB 超过 roms 分区的 8 MB —— "
                  "减少游戏或把 partitions.csv 里的分区改大" % (total / 1048576))
 
 

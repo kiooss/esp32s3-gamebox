@@ -50,7 +50,7 @@ int rom_store_init(void)
         return 0;
     }
 
-    /* 整个分区映射进来。ESP32-S3 的 flash mmap 窗口足够大，4 MB 没问题。
+    /* 整个分区映射进来。ESP32-S3 的 flash mmap 窗口足够大，8 MB 没问题。
      * 不解除映射：ROM 指针要在整个运行期间一直有效。 */
     const void *base = NULL;
     esp_partition_mmap_handle_t handle;

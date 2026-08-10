@@ -13,7 +13,7 @@ project(esp32s3-gamebox)
 # 或者手工：
 #   esptool.py write_flash 0x110000 build/roms.bin
 #
-# 没有做成 `idf.py flash` 的一部分 —— ROM 3 MB 烧一次要半分钟，而它几乎从不变，
+# 没有做成 `idf.py flash` 的一部分 —— ROM 镜像 6 MB 多，烧一次要几分钟，
 # 每次改代码都重烧是白等。加了游戏才需要跑一次 flash-roms。
 set(ROMS_IMAGE "${CMAKE_BINARY_DIR}/roms.bin")
 file(GLOB ROM_FILES "${CMAKE_SOURCE_DIR}/roms/*.nes")
@@ -34,7 +34,7 @@ set(ROMS_OFFSET 0x110000)
 
 add_custom_target(flash-roms
     COMMAND ${CMAKE_COMMAND} -E echo
-            "烧 ROM 分区到 ${ROMS_OFFSET}（3 MB，约半分钟）"
+            "烧 ROM 分区到 ${ROMS_OFFSET}（8 MB 分区，约数分钟）"
     COMMAND python3 -m esptool --chip esp32s3 ${ESPTOOL_WRITE_FLASH_ARGS}
             write_flash ${ROMS_OFFSET} "${ROMS_IMAGE}"
     DEPENDS "${ROMS_IMAGE}"
