@@ -32,6 +32,7 @@
 #include "display.h"
 #include "input_serial.h"
 #include "input_gamepad.h"
+#include "audio_output.h"
 #include "rgb_led.h"
 #include "nofrendo.h"
 #include "freertos/FreeRTOS.h"
@@ -146,10 +147,6 @@ extern const uint8_t rom_end[]   asm(ROM_ASM(ROM_SYM, end));
  */
 #define NES_SATURATION  150
 
-/* 音频还没接喇叭，但采样率不能填 0 —— apu_build_luts(0) 会除零。
- * 给个正常值让 APU 正常跑，输出直接丢掉，将来接 I2S 时这里就是现成的。 */
-#define AUDIO_SAMPLE_RATE  16000
-
 /* NES 可见区域：裁掉上下各 8 行 overscan */
 #define SRC_Y0      8
 #define SRC_Y1      232                 /* 不含，共 224 行 */
@@ -168,8 +165,6 @@ _Static_assert(DISP_FB_H == SRC_Y1 - SRC_Y0,
                "画布高度要和裁掉 overscan 后的行数一致");
 _Static_assert(SRC_W % GROUP_SRC == 0, "源宽度要能被 8 整除，内循环才好展开");
 
-#define FRAME_PERIOD_US  (1000000 / 60)
-
 static uint16_t s_palette[256]; /* 8 位索引 -> RGB565（大端，见 display.h） */
 static uint8_t  *s_vidbuf[2];   /* 各 NES_SCREEN_PITCH * NES_SCREEN_HEIGHT */
 static int       s_draw_idx;    /* nofrendo 当前正渲染进哪一块 */
@@ -179,6 +174,7 @@ static int       s_frames;
 static int64_t   s_emu_us;      /* 累计模拟耗时，用来看 CPU 余量 */
 static int64_t   s_stat_t0;
 static int64_t   s_frame_t0;
+static int       s_frame_period_us;
 
 /* 开机时先跑一遍分阶段计时，把每帧的时间拆到 CPU / PPU 渲染 / 调色板转换 / 推屏。
  * 调性能或者换硬件之后打开它，能一眼看出瓶颈在哪。 */
@@ -276,10 +272,10 @@ static void blit_frame(uint8_t *vidbuf)
     s_draw_idx ^= 1;
     nes_setvidbuf(s_vidbuf[s_draw_idx]);
 
-    /* ---- 帧率对齐到 60fps ----
-     * display_stream() 只保证不超过屏幕能吃下的速度，不等于 NES 的 60fps，
+    /* ---- 帧率对齐到 ROM 制式 ----
+     * display_stream() 只保证不超过屏幕能吃下的速度，不等于 NES 的 50/60fps，
      * 所以这里自己配速。 */
-    s_next_frame += FRAME_PERIOD_US;
+    s_next_frame += s_frame_period_us;
     int64_t now = esp_timer_get_time();
     if (s_next_frame > now) {
         int64_t wait_us = s_next_frame - now;
@@ -334,10 +330,16 @@ esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
     /* 把菜单擦掉。只要一次 —— 没有常驻缓冲了，之后每帧都是现算的。 */
     display_stream_sync(black_strip, NULL);
 
-    if (nofrendo_init(SYS_DETECT, AUDIO_SAMPLE_RATE, false, blit_frame,
+    if (nofrendo_init(SYS_DETECT, NES_AUDIO_SAMPLE_RATE, false, blit_frame,
                       NULL, NULL) != 0) {
         ESP_LOGE(TAG, "nofrendo 初始化失败");
         return ESP_FAIL;
+    }
+
+    esp_err_t audio_err = audio_output_init();
+    if (audio_err != ESP_OK) {
+        ESP_LOGW(TAG, "MAX98357 音频未启动：%s，继续静音运行",
+                 esp_err_to_name(audio_err));
     }
 
     if (build_palette() != ESP_OK) {
@@ -364,6 +366,11 @@ esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
         return ESP_FAIL;
     }
 
+    /* PAL 每帧 480 个音频样本、NTSC 每帧 400 个。模拟帧率必须跟 ROM 制式一致，
+     * 否则 PAL 游戏仍以 60fps 生产音频，会超过 24kHz I2S 的消费速度并持续丢帧。 */
+    int refresh_rate = nes_getptr()->refresh_rate;
+    s_frame_period_us = 1000000 / refresh_rate;
+
     /* ⚠ 必须在 nes_insertcart 之后 ——
      * insertcart 内部会调 nes_reset()，而 nes_reset() 里有一句 nes.vidbuf = NULL。
      * 先 setvidbuf 再 insertcart 的话缓冲会被清掉，nes_emulate 开头的
@@ -382,7 +389,7 @@ esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
 
     printf("内部 RAM 剩余 %u KB\n",
            (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
-    printf("开始模拟，目标 60 fps。\n\n");
+    printf("开始模拟，目标 %d fps。\n\n", refresh_rate);
 
     /* nes_insertcart 里已经做过 hard reset，这里不用再来一次
      * —— 再调一次又会把 vidbuf 清成 NULL。 */

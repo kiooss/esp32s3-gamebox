@@ -1,7 +1,7 @@
 # 注意：一旦给 main 显式写了 REQUIRES，它就不再自动依赖全部组件了，
 # 所以 display.c / nes_emu.c 用到的驱动都得在这里列全。
 idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
-                            "rgb_led.c"
+                            "rgb_led.c" "audio_output.c"
                             "input_serial.c" "input_gamepad.c"
                             "rom_store.c" "rom_menu.c"
                        INCLUDE_DIRS "."
@@ -11,6 +11,7 @@ idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
                                 esp_driver_spi
                                 esp_driver_gpio
                                 esp_driver_ledc
+                                esp_driver_i2s
                                 esp_driver_uart
                                 espressif__led_strip  # 板载可寻址 RGB LED
                                 esp_adc         # 摇杆走 ADC1
@@ -32,3 +33,7 @@ idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
                                    "roms/SimpleParallaxDemo.nes"
                                    "roms/full_palette.nes"
                                    "roms/flowing_palette.nes")
+
+# nofrendo 没有宿主音频回调。包装它每帧唯一一次的 apu_emulate() 调用，
+# 让 main/audio_output.c 接走 PCM；不修改 components/nofrendo 上游源码。
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=apu_emulate")
