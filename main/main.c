@@ -16,6 +16,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "display.h"
+#include "audio_output.h"
 #include "nes_emu.h"
 #include "gbc_emu.h"
 #include "rom_menu.h"
@@ -113,6 +114,10 @@ void app_main(void)
         ESP_LOGE(TAG, "NES 视频缓冲分配失败，内部 RAM 不够");
         return;
     }
+
+    /* NVS 可能从内部堆分配管理结构，必须等 NES 两块 64 KB 连续视频缓冲
+     * 先占好位置；声音设置失败不影响游戏，只退回默认开启且不持久化。 */
+    audio_output_settings_init();
 
     if (display_init() != ESP_OK) {
         ESP_LOGE(TAG, "屏幕初始化失败，检查接线和 display.h 里的引脚定义");

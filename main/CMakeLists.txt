@@ -17,6 +17,7 @@ idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
                                 espressif__led_strip  # 板载可寻址 RGB LED
                                 esp_adc         # 摇杆走 ADC1
                                 esp_timer
+                                nvs_flash      # 记住菜单里的声音开关
                                 spi_flash      # 提供 esp_flash.h
                        # 这里登记的 ROM 只是「可选」，不是全都进固件 —— 没被
                        # nes_emu.c 的 ROM_CHOICE 选中的那几个没有 extern 引用，

@@ -137,6 +137,9 @@ malloc 一块内部缓冲再 memcpy —— 数据最后照样落在内部 RAM，
 `build/roms.bin`，再用 `idf.py flash-roms` 单独烧入。开机菜单会显示 `NES/GB/GBC`
 类型；换游戏仍按板子 RST 重启，避免在不同模拟器之间留下运行时状态。
 
+选单里按大按键 B 可切换声音开关，标题右侧会显示当前状态。设置写入 NVS，
+所以按 RST 换游戏或重新上电后仍会保持；进入游戏后 B 恢复为原本的跑/发射键。
+
 `main/roms/` 只用于 ROM 分区不可用时的 NES 编译期回退。只有要更换这个回退游戏时，
 才需要同步修改 `main/CMakeLists.txt` 的 `EMBED_FILES` 和 `main/nes_emu.c` 的
 `ROM_CHOICE`。
@@ -149,7 +152,7 @@ JoyStick Shield，接线见「接线」一节。两路输入**并存**（按位�
 | 手柄 | 作用 |
 |---|---|
 | 大按键 A | A（跳） |
-| 大按键 B | B（跑 / 发射） |
+| 大按键 B | 选单：声音开关；游戏：B（跑 / 发射） |
 | 大按键 C | SELECT |
 | 大按键 D | START |
 | 摇杆 | 上下左右（模拟量，带死区 + 迟滞） |
@@ -172,7 +175,7 @@ idf.py -p /dev/cu.usbserial-A5069RR4 monitor
 |---|---|
 | `W` `A` `S` `D` 或方向键 | 上下左右 |
 | `K` 或 `Z` | A（跳） |
-| `J` 或 `X` | B（跑 / 发射） |
+| `J` 或 `X` | 选单：声音开关；游戏：B（跑 / 发射） |
 | 回车 | START |
 | Tab | SELECT |
 | 空格 | 全部松开（按键卡住时用） |

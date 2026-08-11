@@ -25,6 +25,7 @@
 #include "rom_menu.h"
 #include "rom_store.h"
 #include "display.h"
+#include "audio_output.h"
 #include "input_serial.h"
 #include "input_gamepad.h"
 #include "nofrendo.h"
@@ -43,6 +44,7 @@ static const char *TAG = "menu";
 #define FOOTER_LINE_Y  204
 #define FOOTER_Y       207
 #define TEXT_X         8       /* 文字左缩进 */
+#define SOUND_X        184     /* `声音:开/关` 右边仍给页码留足空间 */
 #define HL_PAD         2       /* 反白块比文字左右各多出这么多 */
 #define C_DIVIDER      RGB565(48, 48, 48)
 
@@ -56,7 +58,7 @@ static uint8_t poll_input(void)
 /* 条带回调：整份绘制列表每帧会被逐条带调用 BAND_COUNT 次，每次只画到落在
  * 当前条带里的那几行（display.c 的绘图原语自己裁）。菜单只有按键时才重画，
  * 重复执行这段的开销可以忽略。 */
-typedef struct { int count, sel; } draw_args_t;
+typedef struct { int count, sel; bool muted; } draw_args_t;
 
 static const char *system_name(rom_system_t system)
 {
@@ -78,6 +80,8 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
     display_clear(C_BLACK);
 
     display_text(TEXT_X, TITLE_Y, "游戏选择", C_CYAN, 1);
+    display_text(SOUND_X, PAGE_Y, a->muted ? "声音:关" : "声音:开",
+                 a->muted ? C_GRAY : C_GREEN, 1);
 
     char page_text[32];
     snprintf(page_text, sizeof(page_text), "%d/%d", page + 1, page_count);
@@ -109,13 +113,17 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
 
     display_fill_rect(TEXT_X, FOOTER_LINE_Y, DISP_FB_W - 2 * TEXT_X, 1,
                       C_DIVIDER);
-    display_text(44, FOOTER_Y, "上下选择  左右翻页  A开始", C_GRAY, 1);
+    display_text(68, FOOTER_Y, "A开始  B声音  左右翻页", C_GRAY, 1);
 }
 
 /* ctx 指向栈上的 draw_args_t，所以必须用 sync 版本等推完再返回。 */
 static void draw(int count, int sel)
 {
-    draw_args_t a = { .count = count, .sel = sel };
+    draw_args_t a = {
+        .count = count,
+        .sel = sel,
+        .muted = audio_output_is_muted(),
+    };
     display_stream_sync(draw_strip, &a);
 }
 
@@ -146,6 +154,19 @@ bool rom_menu_pick(const uint8_t **data, size_t *size, const char **name,
         uint8_t now = poll_input();
         uint8_t edge = now & ~prev;     /* 这一帧新按下的位 */
         prev = now;
+
+        /* B 在开机选单里没有游戏语义，正好做声音开关；进游戏后仍完整保留
+         * 原来的 B（跑/发射），不会占掉任何模拟器按键组合。 */
+        if (edge & NES_PAD_B) {
+            bool muted = !audio_output_is_muted();
+            esp_err_t err = audio_output_set_muted(muted);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "声音已%s，但保存失败：%s",
+                         muted ? "关闭" : "开启", esp_err_to_name(err));
+            }
+            draw(count, sel);
+            continue;
+        }
 
         if (edge & NES_PAD_A || edge & NES_PAD_START) {
             const rom_store_entry_t *e = rom_store_entry(sel);
