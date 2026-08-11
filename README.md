@@ -2,7 +2,7 @@
 
 ESP32-S3-DevKitC-1 兼容板（N16R8）+ ST7789 SPI 屏（240×320，横屏 320×240）。
 
-**目标**：在这块板上跑 NES 模拟器（Super Mario Bros）。
+**目标**：在这块板上运行 NES、Game Boy 和 Game Boy Color 游戏。
 
 硬件详情见 [`docs/hardware.md`](docs/hardware.md)。
 
@@ -17,13 +17,13 @@ ESP32-S3-DevKitC-1 兼容板（N16R8）+ ST7789 SPI 屏（240×320，横屏 320�
       NES 的 8:7 像素宽高比修对（误差 1.6%）
 - [x] **实测锁定 60 fps**（核 0 模拟 8.1 ms/帧，CPU 余量 52%；核 1 推屏 14.0 ms/帧）
 - [x] **《超级马里奥兄弟》标题画面正常运行**，颜色已校准
+- [x] 移植 GB/GBC 模拟器核心（gnuboy）并接入同一套菜单、手柄、显示和音频
 - [x] 串口键盘当手柄（临时方案）→ `main/input_serial.c`
 - [x] JoyStick Shield 手柄 → `main/input_gamepad.c`（摇杆 + 四个按键，实测正常）
-- [ ] 音频（I2S DAC + 喇叭，可选）
+- [x] MAX98357 I2S 游戏音频
 
-ROM 说明：《超级马里奥兄弟》的 ROM 是任天堂版权物，**本仓库不包含**，需自备
-（见下方「克隆后先补 ROM」）。随仓库分发的三个是 nofrendo 测试套件里的
-公有领域 homebrew，用于验证。
+ROM 说明：商业 NES/GB/GBC ROM 都是版权物，**本仓库不包含**，需由使用者自备。
+随仓库分发的三个 `.nes` 是 nofrendo 测试套件里的公有领域 homebrew，用于验证。
 
 ## 代码结构
 
@@ -32,8 +32,11 @@ ROM 说明：《超级马里奥兄弟》的 ROM 是任天堂版权物，**本仓
 | `main/main.c` | 启动流程：板级信息 → 初始化屏 → 启动模拟器 |
 | `main/display.c` | ST7789 显示层。条带流式推屏 + 核 1 推屏任务，对上层只暴露「按条带填像素」 |
 | `main/nes_emu.c` | 适配层。把 nofrendo 的 8 位调色板画面逐条带转成 RGB565 推屏 |
+| `main/gbc_emu.c` | GB/GBC 适配层。把 160×144 大端 RGB565 等比放大到 240×216，并接入公共输入/音频 |
+| `roms/` | 本地游戏库；`.nes/.gb/.gbc` 会被打成 mmap ROM 分区镜像，不入库 |
 | `main/roms/` | 内置 ROM（公有领域测试 ROM） |
 | `components/nofrendo/` | NES 模拟器核心，取自 [retro-go](https://github.com/ducalex/retro-go)，**未改动源码** |
+| `components/gnuboy/` | GB/GBC 模拟器核心，取自 Retro-Go；宿主适配放在 `main/` |
 | `components/nofrendo/rg_system.h` | 唯一的粘合层：nofrendo 只需要日志 / CRC32 / IRAM_ATTR 三样东西 |
 
 ### 画面怎么放
@@ -55,6 +58,10 @@ NES 输出 256×240，裁掉上下各 8 行 overscan 得 256×224。画布是 **
 
 画布**只覆盖这块 288×224 的画面区**，不是整屏（见 `display.h` 的 `DISP_FB_W/H`）。
 黑边（左右各 16 列、上下各 8 行）由 `display_init()` 开机时清一次、之后再不碰。
+
+GB/GBC 原生输出是 160×144 方形像素，在同一块 288×224 画布内按 3:2 等比放大为
+240×216，左右各留 24 列、上下各留 4 行。两块源帧放 PSRAM；条带 DMA 缓冲仍在
+内部 RAM，因此不会改变 NES 已验证的热内存布局。
 
 ### 显示层为什么没有帧缓冲
 
@@ -126,9 +133,13 @@ malloc 一块内部缓冲再 memcpy —— 数据最后照样落在内部 RAM，
 
 ### 换 ROM
 
-把 `.nes` 文件放进 `main/roms/`，加到 `main/CMakeLists.txt` 的 `EMBED_FILES`，
-再改 `main/nes_emu.c` 顶部的 `ROM_CHOICE` 和对应的 `asm("_binary_..._nes_start")` 符号名
-（符号名由文件名生成：`foo-bar.nes` → `_binary_foo_bar_nes_start`）。
+日常游戏库放在顶层 `roms/`：支持 `.nes`、`.gb`、`.gbc`，运行 `idf.py build` 会生成
+`build/roms.bin`，再用 `idf.py flash-roms` 单独烧入。开机菜单会显示 `NES/GB/GBC`
+类型；换游戏仍按板子 RST 重启，避免在不同模拟器之间留下运行时状态。
+
+`main/roms/` 只用于 ROM 分区不可用时的 NES 编译期回退。只有要更换这个回退游戏时，
+才需要同步修改 `main/CMakeLists.txt` 的 `EMBED_FILES` 和 `main/nes_emu.c` 的
+`ROM_CHOICE`。
 
 ### 操作（手柄）
 
@@ -205,6 +216,7 @@ FCEUX 调色板 `(216,40,0)` 的 67%~74%，在小屏上看着发褐，换哪套�
 - **核 0（模拟）**：运行时每秒往串口打一行 `NES 60 fps (模拟+转换 8.1 ms/帧…)`。
   想拆得更细就把 `main/nes_emu.c` 顶部的 `DIAG_TIMING` 改成 `1`，开机会先跑一遍
   分阶段计时（只跑 CPU / +PPU 渲染 / 完整）。
+  GB/GBC 路径对应输出 `GB 59.7 fps` 或 `GBC 59.7 fps`。
 - **核 1（转换+推屏）**：`main/display.c` 顶部的 `DISP_PROFILE`（默认 `1`）每秒打一行
   `推屏 14.03 ms/帧（32 行/条 x 7 条…）`。调条带尺寸或画布尺寸时直接看这个数。
   嫌吵改成 `0`。
@@ -310,6 +322,9 @@ NES 画面对不上的组合），以及 `display.c` 的 `BAND_LINES`（最好�
 `components/nofrendo/` 取自 [retro-go](https://github.com/ducalex/retro-go)，
 源自 Matthew Conte 的 Nofrendo，**GPL v2**
 （见 `components/nofrendo/COPYING` 和 `CREDITS`，源码未做修改）。
+
+`components/gnuboy/` 同样取自 Retro-Go，基线提交记录在该目录的
+`README.gamebox.md`，许可文本见 `components/gnuboy/COPYING`。
 
 由于链接了 GPL 代码，**整个固件在分发时受 GPL v2 约束**。自己玩没影响，
 但如果要公开发布二进制或仓库，需要一并提供源码。

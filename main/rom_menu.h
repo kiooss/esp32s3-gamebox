@@ -12,6 +12,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "rom_store.h"
 
 /* 显示选单并阻塞，直到用户选定一个游戏。
  *
@@ -23,4 +24,5 @@
  *
  * 前置条件：display_init() 已经成功。输入初始化在函数内部做（幂等，
  * nes_emu_run() 之后再调一次没关系）。 */
-bool rom_menu_pick(const uint8_t **data, size_t *size, const char **name);
+bool rom_menu_pick(const uint8_t **data, size_t *size, const char **name,
+                   rom_system_t *system);

@@ -1,5 +1,5 @@
 /*
- * 在 ESP32-S3 + ST7789（240x320）上跑 NES
+ * 在 ESP32-S3 + ST7789（240x320）上运行 NES / GB / GBC
  *
  * 流程：打印板级信息 -> 初始化屏 -> 开机选游戏 -> 启动模拟器（不返回）
  *
@@ -17,6 +17,7 @@
 #include "esp_log.h"
 #include "display.h"
 #include "nes_emu.h"
+#include "gbc_emu.h"
 #include "rom_menu.h"
 
 static const char *TAG = "main";
@@ -30,7 +31,7 @@ static void print_board_info(void)
     uint32_t flash = 0;
     esp_flash_get_size(NULL, &flash);
 
-    printf("\n=========== ESP32-S3 NES ===========\n");
+    printf("\n========= ESP32-S3 GAMEBOX =========\n");
     printf("芯片      : ESP32-S3, %d core(s), rev %d.%d\n",
            info.cores, info.revision / 100, info.revision % 100);
     printf("Flash     : %" PRIu32 " MB\n", flash / (1024 * 1024));
@@ -128,9 +129,13 @@ void app_main(void)
     const uint8_t *rom  = NULL;
     size_t         size = 0;
     const char    *name = NULL;
-    rom_menu_pick(&rom, &size, &name);
+    rom_system_t   system = ROM_SYSTEM_NES;
+    rom_menu_pick(&rom, &size, &name, &system);
 
-    if (nes_emu_run(rom, size, name) != ESP_OK) {
+    esp_err_t run_err = system == ROM_SYSTEM_NES
+                      ? nes_emu_run(rom, size, name)
+                      : gbc_emu_run(rom, size, name);
+    if (run_err != ESP_OK) {
         ESP_LOGE(TAG, "模拟器启动失败");
     }
 }

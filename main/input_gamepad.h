@@ -49,6 +49,19 @@
 #pragma once
 
 #include <stdint.h>
+
+/* 两种宿主输入都返回这套公共位。数值故意与 NES_PAD_* 一致，所以 NES 路径
+ * 可以零转换直传；GB/GBC 适配层再显式映射到 gnuboy 的不同位序。 */
+enum {
+    GAMEPAD_BIT_A      = 0x01,
+    GAMEPAD_BIT_B      = 0x02,
+    GAMEPAD_BIT_SELECT = 0x04,
+    GAMEPAD_BIT_START  = 0x08,
+    GAMEPAD_BIT_UP     = 0x10,
+    GAMEPAD_BIT_DOWN   = 0x20,
+    GAMEPAD_BIT_LEFT   = 0x40,
+    GAMEPAD_BIT_RIGHT  = 0x80,
+};
 #include <stdbool.h>
 
 /* ============ 接线（改这里就能换脚） ============ */

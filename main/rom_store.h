@@ -5,7 +5,7 @@
  * 格式定义见那个脚本的顶部注释。
  *
  * 整个分区一次 mmap 进地址空间，所以 rom_store_entry() 给出的 `data` 是个
- * 可以直接读的普通指针 —— 原样传给 nofrendo 的 rom_loadmem 就行，走 flash
+ * 可以直接读的普通指针 —— 原样传给对应模拟器就行，走 flash
  * cache，零拷贝、不占 RAM。这也是当初不用 SPIFFS 的原因：文件系统不能 mmap，
  * 得把 ROM 整份读进内存，大卡 512 KB 只能落 PSRAM，比 flash cache 慢。
  *
@@ -25,10 +25,17 @@
 /* 显示名的缓冲长度，和打包脚本里的 NAME_LEN 必须一致。 */
 #define ROM_STORE_NAME_LEN 40
 
+typedef enum {
+    ROM_SYSTEM_NES = 1,
+    ROM_SYSTEM_GB  = 2,
+    ROM_SYSTEM_GBC = 3,
+} rom_system_t;
+
 typedef struct {
     const char    *name;   /* 显示名，指向 mmap 区域，NUL 结尾 */
     const uint8_t *data;   /* ROM 首字节 */
     size_t         size;
+    rom_system_t   system;
 } rom_store_entry_t;
 
 /* 映射 roms 分区并校验目录。返回认到的游戏数，0 表示不可用

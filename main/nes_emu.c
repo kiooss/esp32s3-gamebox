@@ -336,7 +336,7 @@ esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
         return ESP_FAIL;
     }
 
-    esp_err_t audio_err = audio_output_init();
+    esp_err_t audio_err = audio_output_init(NES_AUDIO_SAMPLE_RATE);
     if (audio_err != ESP_OK) {
         ESP_LOGW(TAG, "MAX98357 音频未启动：%s，继续静音运行",
                  esp_err_to_name(audio_err));

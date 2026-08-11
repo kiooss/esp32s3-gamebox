@@ -1,10 +1,8 @@
 /*
  * MAX98357 I2S 音频输出
  *
- * nofrendo 的 apu_emulate() 把一帧 PCM 写进自己的私有缓冲，却没有宿主回调。
- * 不改上游源码：链接时用 --wrap=apu_emulate 把那一次调用接到这里，仍由公开的
- * apu_process() 生成完全相同的 PCM，再交给独立 I2S 任务。这样以后可以直接
- * 覆盖 components/nofrendo 更新上游，不需要重打补丁。
+ * NES 和 GB/GBC 共用的非阻塞宿主后端。nofrendo 没有音频回调，所以仍用
+ * --wrap=apu_emulate 接出 PCM；gnuboy 则直接调用 audio_output_submit_stereo()。
  *
  * 核 0 的模拟线程只生成采样并向队列复制约 1.6 KB，绝不等 I2S。消费任务阻塞
  * 在 DMA 写入上；即使喇叭或驱动异常，也不会把 60 fps 主循环一起卡住。
@@ -29,7 +27,7 @@ static const char *TAG = "audio";
 
 typedef struct {
     uint16_t sample_count;
-    int16_t stereo[NES_AUDIO_MAX_SAMPLES_PER_FRAME * 2];
+    int16_t stereo[AUDIO_OUTPUT_MAX_FRAMES_PER_PACKET * 2];
 } audio_packet_t;
 
 static i2s_chan_handle_t s_tx;
@@ -38,6 +36,24 @@ static int16_t s_mono[NES_AUDIO_MAX_SAMPLES_PER_FRAME];
 static audio_packet_t s_producer_packet;
 static uint32_t s_dropped;
 static uint32_t s_write_errors;
+static uint32_t s_sample_rate;
+
+void audio_output_submit_stereo(const int16_t *samples, size_t frame_count)
+{
+    if (!s_queue || !samples || frame_count == 0) return;
+    if (frame_count > AUDIO_OUTPUT_MAX_FRAMES_PER_PACKET) {
+        frame_count = AUDIO_OUTPUT_MAX_FRAMES_PER_PACKET;
+    }
+
+    s_producer_packet.sample_count = frame_count;
+    for (size_t i = 0; i < frame_count * 2; i++) {
+        s_producer_packet.stereo[i] = samples[i] >> AUDIO_VOLUME_SHIFT;
+    }
+
+    if (xQueueSend(s_queue, &s_producer_packet, 0) != pdTRUE) {
+        s_dropped++;
+    }
+}
 
 /* 由链接器替换 nofrendo 的 apu_emulate() 调用。函数仍在模拟线程里运行，
  * 所以这里不能阻塞等待 I2S；队列满时宁可丢当前帧并计数。 */
@@ -49,18 +65,14 @@ void __wrap_apu_emulate(void)
         /* 目前 nofrendo 只会给 50/60 Hz；遇到意外制式时宁可截断，也不能写出缓冲。 */
         sample_count = NES_AUDIO_MAX_SAMPLES_PER_FRAME;
     }
-    s_producer_packet.sample_count = sample_count;
     apu_process(s_mono, sample_count, false);
 
     for (int i = 0; i < sample_count; i++) {
-        int16_t sample = s_mono[i] >> AUDIO_VOLUME_SHIFT;
+        int16_t sample = s_mono[i];
         s_producer_packet.stereo[i * 2] = sample;
         s_producer_packet.stereo[i * 2 + 1] = sample;
     }
-
-    if (s_queue && xQueueSend(s_queue, &s_producer_packet, 0) != pdTRUE) {
-        s_dropped++;
-    }
+    audio_output_submit_stereo(s_producer_packet.stereo, sample_count);
 }
 
 static void audio_task(void *arg)
@@ -85,17 +97,19 @@ static void audio_task(void *arg)
 
         frames_written++;
         if (frames_written % 300 == 0) {
-            ESP_LOGI(TAG, "I2S 24kHz：%u 帧，排队 %u，丢帧 %u，写错 %u",
-                     (unsigned)frames_written,
+            ESP_LOGI(TAG, "I2S %uHz：%u 帧，排队 %u，丢帧 %u，写错 %u",
+                     (unsigned)s_sample_rate, (unsigned)frames_written,
                      (unsigned)uxQueueMessagesWaiting(s_queue),
                      (unsigned)s_dropped, (unsigned)s_write_errors);
         }
     }
 }
 
-esp_err_t audio_output_init(void)
+esp_err_t audio_output_init(uint32_t sample_rate)
 {
     if (s_tx) return ESP_OK;
+    if (sample_rate == 0) return ESP_ERR_INVALID_ARG;
+    s_sample_rate = sample_rate;
 
     s_queue = xQueueCreate(AUDIO_QUEUE_FRAMES, sizeof(audio_packet_t));
     if (!s_queue) return ESP_ERR_NO_MEM;
@@ -110,7 +124,7 @@ esp_err_t audio_output_init(void)
     if (err != ESP_OK) goto fail_queue;
 
     i2s_std_config_t std_cfg = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(NES_AUDIO_SAMPLE_RATE),
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
             I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
@@ -132,7 +146,7 @@ esp_err_t audio_output_init(void)
     if (err != ESP_OK) goto fail_channel;
 
     BaseType_t created = xTaskCreatePinnedToCore(
-        audio_task, "nes_audio", 4096, NULL, 3, NULL, 0);
+        audio_task, "game_audio", 4096, NULL, 3, NULL, 0);
     if (created != pdPASS) {
         err = ESP_ERR_NO_MEM;
         i2s_channel_disable(s_tx);
@@ -140,8 +154,8 @@ esp_err_t audio_output_init(void)
     }
 
     ESP_LOGI(TAG,
-             "MAX98357 就绪：24kHz/16-bit，BCLK=%d LRC=%d DIN=%d，音量 25%%",
-             I2S_PIN_BCLK, I2S_PIN_LRC, I2S_PIN_DOUT);
+             "MAX98357 就绪：%uHz/16-bit，BCLK=%d LRC=%d DIN=%d，音量 25%%",
+             (unsigned)sample_rate, I2S_PIN_BCLK, I2S_PIN_LRC, I2S_PIN_DOUT);
     return ESP_OK;
 
 fail_channel:

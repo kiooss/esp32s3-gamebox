@@ -58,6 +58,13 @@ static uint8_t poll_input(void)
  * 重复执行这段的开销可以忽略。 */
 typedef struct { int count, sel; } draw_args_t;
 
+static const char *system_name(rom_system_t system)
+{
+    if (system == ROM_SYSTEM_GBC) return "GBC";
+    if (system == ROM_SYSTEM_GB) return "GB ";
+    return "NES";
+}
+
 static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
 {
     const draw_args_t *a = ctx;
@@ -85,7 +92,8 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
         int y = LIST_Y + (i - first) * ROW_H;
 
         char line[48];
-        snprintf(line, sizeof(line), "%02d  %s", i + 1, e->name);
+        snprintf(line, sizeof(line), "%02d %s %s", i + 1,
+                 system_name(e->system), e->name);
 
         if (i == sel) {
             /* 反白：先铺一条青色块，再在上面写黑字。
@@ -111,7 +119,8 @@ static void draw(int count, int sel)
     display_stream_sync(draw_strip, &a);
 }
 
-bool rom_menu_pick(const uint8_t **data, size_t *size, const char **name)
+bool rom_menu_pick(const uint8_t **data, size_t *size, const char **name,
+                   rom_system_t *system)
 {
     int count = rom_store_init();
     if (count <= 0) {
@@ -144,7 +153,9 @@ bool rom_menu_pick(const uint8_t **data, size_t *size, const char **name)
             *data = e->data;
             *size = e->size;
             *name = e->name;
-            printf("选中：%s（%u 字节）\n\n", e->name, (unsigned)e->size);
+            *system = e->system;
+            printf("选中：[%s] %s（%u 字节）\n\n", system_name(e->system),
+                   e->name, (unsigned)e->size);
             return true;
         }
 

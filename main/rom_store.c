@@ -17,14 +17,17 @@
 
 static const char *TAG = "romstore";
 
-#define MAGIC       "NESROMS\0"
+#define MAGIC        "GAMEBOX\0"
+#define LEGACY_MAGIC "NESROMS\0"
 #define MAGIC_LEN   8
 #define HEADER_LEN  12          /* magic[8] + count(u32) */
-#define ENTRY_LEN   48          /* name[40] + offset(u32) + size(u32) */
+#define ENTRY_LEN   52          /* name[40] + system(u32) + offset + size */
+#define LEGACY_ENTRY_LEN 48     /* 旧镜像：name[40] + offset + size */
 
 /* iNES 文件的下限：16 字节头 + 至少一个 16 KB PRG bank。
  * 比这还小的一定不是能跑的卡。 */
-#define ROM_MIN_SIZE  (16 + 16 * 1024)
+#define NES_ROM_MIN_SIZE  (16 + 16 * 1024)
+#define GB_ROM_MIN_SIZE   0x4000
 
 static rom_store_entry_t s_entries[ROM_STORE_MAX];
 static int  s_count = -1;       /* -1 = 还没试过 */
@@ -62,7 +65,8 @@ int rom_store_init(void)
     }
 
     const uint8_t *img = base;
-    if (memcmp(img, MAGIC, MAGIC_LEN) != 0) {
+    bool legacy = memcmp(img, LEGACY_MAGIC, MAGIC_LEN) == 0;
+    if (!legacy && memcmp(img, MAGIC, MAGIC_LEN) != 0) {
         ESP_LOGW(TAG, "roms 分区里没有镜像 —— 跑一次 `idf.py flash-roms`");
         return 0;
     }
@@ -75,7 +79,8 @@ int rom_store_init(void)
     }
 
     /* 目录表本身得落在分区内 */
-    size_t dir_end = HEADER_LEN + (size_t)count * ENTRY_LEN;
+    size_t entry_len = legacy ? LEGACY_ENTRY_LEN : ENTRY_LEN;
+    size_t dir_end = HEADER_LEN + (size_t)count * entry_len;
     if (dir_end > part->size) {
         ESP_LOGE(TAG, "目录表超出分区大小");
         return 0;
@@ -83,14 +88,21 @@ int rom_store_init(void)
 
     int n = 0;
     for (uint32_t i = 0; i < count; i++) {
-        const uint8_t *e = img + HEADER_LEN + (size_t)i * ENTRY_LEN;
-        uint32_t off  = rd32(e + ROM_STORE_NAME_LEN);
-        uint32_t size = rd32(e + ROM_STORE_NAME_LEN + 4);
+        const uint8_t *e = img + HEADER_LEN + (size_t)i * entry_len;
+        rom_system_t system = legacy ? ROM_SYSTEM_NES
+                                     : (rom_system_t)rd32(e + ROM_STORE_NAME_LEN);
+        size_t value_off = ROM_STORE_NAME_LEN + (legacy ? 0 : 4);
+        uint32_t off  = rd32(e + value_off);
+        uint32_t size = rd32(e + value_off + 4);
 
         /* 每一条都验：数据落在分区内、不和目录表重叠、大小像个 ROM。
          * off + size 用 64 位算，避免 32 位回绕把越界算成合法。 */
-        if ((uint64_t)off + size > part->size || off < dir_end ||
-            size < ROM_MIN_SIZE) {
+        size_t min_size = system == ROM_SYSTEM_NES ? NES_ROM_MIN_SIZE
+                                                   : GB_ROM_MIN_SIZE;
+        if ((system != ROM_SYSTEM_NES && system != ROM_SYSTEM_GB &&
+             system != ROM_SYSTEM_GBC) ||
+            (uint64_t)off + size > part->size || off < dir_end ||
+            size < min_size) {
             ESP_LOGW(TAG, "第 %u 条越界或过小（off=%u size=%u），跳过",
                      (unsigned)i, (unsigned)off, (unsigned)size);
             continue;
@@ -104,16 +116,22 @@ int rom_store_init(void)
             continue;
         }
 
-        /* 顺手确认是 iNES。坏文件在打包时就该挡掉，这里是第二道 ——
-         * 让它在选单里就消失，而不是选中之后才崩。 */
-        if (memcmp(img + off, "NES\x1a", 4) != 0) {
-            ESP_LOGW(TAG, "第 %u 条（%s）不是 iNES 文件，跳过", (unsigned)i, name);
+        /* 再查一次各系统最便宜但可靠的头特征。GB/GBC 的 0x104 开始是固定
+         * Nintendo logo；这里比只信扩展名强，也不会把任意数据喂给核心。 */
+        static const uint8_t gb_logo_head[4] = {0xCE, 0xED, 0x66, 0x66};
+        bool header_ok = system == ROM_SYSTEM_NES
+                       ? memcmp(img + off, "NES\x1a", 4) == 0
+                       : size >= 0x150 &&
+                         memcmp(img + off + 0x104, gb_logo_head, 4) == 0;
+        if (!header_ok) {
+            ESP_LOGW(TAG, "第 %u 条（%s）ROM 头无效，跳过", (unsigned)i, name);
             continue;
         }
 
         s_entries[n].name = name;
         s_entries[n].data = img + off;
         s_entries[n].size = size;
+        s_entries[n].system = system;
         n++;
     }
 
