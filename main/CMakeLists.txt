@@ -3,7 +3,7 @@
 idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
                             "gbc_emu.c"
                             "rgb_led.c" "audio_output.c"
-                            "input_serial.c" "input_gamepad.c"
+                            "input_serial.c" "input_gamepad.c" "input_usb.c"
                             "rom_store.c" "rom_menu.c"
                        INCLUDE_DIRS "."
                        REQUIRES nofrendo gnuboy
@@ -14,6 +14,8 @@ idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
                                 esp_driver_ledc
                                 esp_driver_i2s
                                 esp_driver_uart
+                                usb             # ESP32-S3 原生 USB-OTG Host
+                                usb_host_hid    # 通用 HID 手柄的中断报告接收
                                 espressif__led_strip  # 板载可寻址 RGB LED
                                 esp_adc         # 摇杆走 ADC1
                                 esp_timer

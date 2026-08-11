@@ -15,3 +15,4 @@ dependencies:
   #   # All dependencies of `main` are public by default.
   #   public: true
   espressif/led_strip: ^2.5.4
+  espressif/usb_host_hid: ^1.0.1

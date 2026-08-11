@@ -20,6 +20,7 @@ ESP32-S3-DevKitC-1 兼容板（N16R8）+ ST7789 SPI 屏（240×320，横屏 320�
 - [x] 移植 GB/GBC 模拟器核心（gnuboy）并接入同一套菜单、手柄、显示和音频
 - [x] 串口键盘当手柄（临时方案）→ `main/input_serial.c`
 - [x] JoyStick Shield 手柄 → `main/input_gamepad.c`（摇杆 + 四个按键，实测正常）
+- [x] USB HID 手柄 → `main/input_usb.c`（通用描述符解析，优先支持 Raspberry Pi/RetroPie 复古手柄）
 - [x] MAX98357 I2S 游戏音频
 
 ROM 说明：商业 NES/GB/GBC ROM 都是版权物，**本仓库不包含**，需由使用者自备。
@@ -146,8 +147,8 @@ malloc 一块内部缓冲再 memcpy —— 数据最后照样落在内部 RAM，
 
 ### 操作（手柄）
 
-JoyStick Shield，接线见「接线」一节。两路输入**并存**（按位或），
-串口键盘留着当调试后路 —— 手柄接错脚或者摇杆调不对时还能把游戏开起来对照。
+JoyStick Shield，接线见「接线」一节。飞线手柄、USB 手柄、串口键盘三路输入
+**并存**（按位或），串口留着当调试后路。
 
 | 手柄 | 作用 |
 |---|---|
@@ -180,6 +181,13 @@ idf.py -p /dev/cu.usbserial-A5069RR4 monitor
 | Tab | SELECT |
 | 空格 | 全部松开（按键卡住时用） |
 | `Ctrl+]` | 退出 monitor |
+
+还可以接有线 USB HID 手柄，三路输入会按位合并，不需要在菜单中切换。使用丝印
+`USB` 的 Type-C 口并短接板背面的 `USB-OTG` 焊盘；丝印 `COM` 的 Type-C 口继续
+负责供电、烧录和串口。默认按通用 RetroPie/SNES 编号映射：Button 1/3 → B，
+Button 2/4 → A，Button 9 → SELECT，Button 10 → START。首次接入会在串口打印
+VID/PID、解析结果和前 40 次原始报告，便于识别换芯片的手柄批次。
+开机摇杆诊断页也接受 USB 手柄 A 或串口 `K/Z` 退出，不要求保留飞线手柄。
 
 **限制**：串口只有「按下」没有「松开」事件，所以每次按键让按钮保持 250ms
 （`input_serial.c` 的 `HOLD_MS`），长按靠终端的按键重复维持。因此：

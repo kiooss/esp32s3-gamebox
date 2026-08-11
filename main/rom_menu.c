@@ -28,6 +28,7 @@
 #include "audio_output.h"
 #include "input_serial.h"
 #include "input_gamepad.h"
+#include "input_usb.h"
 #include "nofrendo.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -52,7 +53,7 @@ static const char *TAG = "menu";
 
 static uint8_t poll_input(void)
 {
-    return input_serial_poll() | input_gamepad_poll();
+    return input_serial_poll() | input_gamepad_poll() | input_usb_poll();
 }
 
 /* 条带回调：整份绘制列表每帧会被逐条带调用 BAND_COUNT 次，每次只画到落在
@@ -136,9 +137,10 @@ bool rom_menu_pick(const uint8_t **data, size_t *size, const char **name,
         return false;
     }
 
-    /* 输入两路都要 —— 手柄是正路，串口是手柄不灵时的后路。
-     * 两个 init 都是幂等的，nes_emu_run() 之后再调一次没问题。 */
+    /* 三路输入并存：飞线手柄、USB HID、串口调试键盘。init 都是幂等的，
+     * 模拟器启动后再调一次没有副作用。 */
     input_serial_init();
+    input_usb_init();
     input_gamepad_init();
 
     printf("\n开机选单：%d 个游戏。摇杆上下选，A 或 START 确认。\n", count);

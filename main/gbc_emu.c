@@ -15,6 +15,7 @@
 #include "display.h"
 #include "input_gamepad.h"
 #include "input_serial.h"
+#include "input_usb.h"
 #include "rgb_led.h"
 #include "gnuboy.h"
 #include "esp_heap_caps.h"
@@ -164,6 +165,7 @@ esp_err_t gbc_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
     }
 
     input_serial_init();
+    input_usb_init();
     input_gamepad_init();
 
     printf("硬件模式：%s，内部 RAM 剩余 %u KB，PSRAM 剩余 %u KB\n",
@@ -179,7 +181,8 @@ esp_err_t gbc_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
     int64_t next_frame = stat_t0;
 
     while (1) {
-        int pad = map_pad(input_serial_poll() | input_gamepad_poll());
+        int pad = map_pad(input_serial_poll() | input_gamepad_poll() |
+                          input_usb_poll());
         if (pad != last_pad) {
             gnuboy_set_pad(pad);
             last_pad = pad;

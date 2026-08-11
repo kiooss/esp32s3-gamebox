@@ -25,6 +25,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "input_gamepad.h"
+#include "input_serial.h"
+#include "input_usb.h"
 #include "display.h"
 #include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
@@ -227,10 +229,15 @@ void input_gamepad_show(void)
     const int HC  = BX + BOX / 2, VC = BY + BOX / 2;
     const int R   = BOX / 2;
 
-    printf("\n摇杆可视化：点跟着手走就说明映射对了。按大按键 A 退出。\n");
-    while (gpio_get_level(PAD_PIN_A) == 0) vTaskDelay(pdMS_TO_TICKS(10));
+    /* USB-only 使用时 GPIO15 只会被内部上拉，一直等实体 A 就永远进不了菜单。
+     * USB 与串口在调用本函数前已初始化，因此三路的 A 都允许退出诊断。 */
+    #define DIAG_A_DOWN() (gpio_get_level(PAD_PIN_A) == 0 || \
+                           (input_usb_poll() & GAMEPAD_BIT_A) || \
+                           (input_serial_poll() & GAMEPAD_BIT_A))
+    printf("\n摇杆可视化：点跟着手走就说明映射对了。按任一手柄 A 退出。\n");
+    while (DIAG_A_DOWN()) vTaskDelay(pdMS_TO_TICKS(10));
 
-    while (gpio_get_level(PAD_PIN_A) == 1) {
+    while (!DIAG_A_DOWN()) {
         int rx = read_axis(s_ch_x);
         int ry = read_axis(s_ch_y);
 
@@ -256,7 +263,8 @@ void input_gamepad_show(void)
                     .ex = ex, .ey = ey, .d = d };
         display_stream_sync(viz_strip, &v);     /* v 在栈上，必须等推完 */
     }
-    while (gpio_get_level(PAD_PIN_A) == 0) vTaskDelay(pdMS_TO_TICKS(10));
+    while (DIAG_A_DOWN()) vTaskDelay(pdMS_TO_TICKS(10));
+    #undef DIAG_A_DOWN
     printf("退出摇杆可视化\n\n");
 }
 
