@@ -13,6 +13,10 @@
  * 而这块缓冲是整个模拟里最热的内存，落到 PSRAM 上 PPU 渲染会慢好几倍。 */
 esp_err_t nes_emu_prealloc(void);
 
+/* 反过来：选中的不是 NES 时，把 prealloc 占住的 128 KB 内部 SRAM 释放掉，
+ * 好让别的核（SNES 帧缓冲 119 KB）抢到内部内存。调用后不能再 nes_emu_run()。 */
+void nes_emu_release_prealloc(void);
+
 /* 初始化模拟器并开始跑指定的 ROM。正常情况下不返回。
  * 调用前必须先 nes_emu_prealloc() 和 display_init()。
  *

@@ -19,6 +19,7 @@
 #include "audio_output.h"
 #include "nes_emu.h"
 #include "gbc_emu.h"
+#include "snes_emu.h"
 #include "rom_menu.h"
 
 static const char *TAG = "main";
@@ -137,9 +138,9 @@ void app_main(void)
     rom_system_t   system = ROM_SYSTEM_NES;
     rom_menu_pick(&rom, &size, &name, &system);
 
-    esp_err_t run_err = system == ROM_SYSTEM_NES
-                      ? nes_emu_run(rom, size, name)
-                      : gbc_emu_run(rom, size, name);
+    esp_err_t run_err = system == ROM_SYSTEM_NES  ? nes_emu_run(rom, size, name)
+                      : system == ROM_SYSTEM_SNES ? snes_emu_run(rom, size, name)
+                                                  : gbc_emu_run(rom, size, name);
     if (run_err != ESP_OK) {
         ESP_LOGE(TAG, "模拟器启动失败");
     }

@@ -1,0 +1,450 @@
+/*
+ * SNES（Snes9x 2005）适配层 —— 可行性验证版
+ *
+ * 为什么值得试：SNES 的可见区是 256x224，和 NES 裁掉 overscan 之后**一模一样**，
+ * 所以横向仍是 9:8 扩展到 288、竖向 1:1，公共画布一个像素都不用改。
+ * 参见 nes_emu.c 里同名的 GROUP_SRC/GROUP_DST。
+ *
+ * 和 NES/GB 那两层的差别（都是刻意的，为了先拿到帧率数据）：
+ *
+ *  1. **渲染缓冲在内部 SRAM，推屏走 PSRAM 影子缓冲**。不是标准的乒乓 ——
+ *     一块 119 KB，内部 SRAM 腾不出第二块。理由见 s_framebuf/s_present 处。
+ *
+ *  2. **无存档、无按键重映射、无菜单**。手柄只有 8 个键，SNES 要 12 个，
+ *     X/Y/L/R 暂时映射不到实体键（见 map_pad）。
+ *
+ *  3. **跳帧默认为 3**（画 1 帧跳 3 帧）。这不是保守估计，是上游 retro-go
+ *     给 SNES 写死的初值（main_snes.c: `app->frameskip = 3;`），
+ *     而它的 README 直接把 SNES 标成 "(slow)"。先按它的设定跑，再看余量。
+ *
+ * ⚠ 授权：snes9x 不是 GPL，src/LICENSE 禁止商业分发。整机固件本来就因为
+ *   nofrendo 受 GPL v2 约束，加上这一条之后分发限制更严。
+ */
+
+#include <string.h>
+#include "snes_emu.h"
+#include "audio_output.h"
+#include "display.h"
+#include "input_gamepad.h"
+#include "input_serial.h"
+#include "input_usb.h"
+#include "nes_emu.h"
+#include "rgb_led.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include <snes9x.h>
+
+static const char *TAG = "snes";
+
+/* 横向 9:8 扩展，和 nes_emu.c 完全同一套参数 —— SNES 可见区也是 256 宽。 */
+#define GROUP_SRC   8
+#define GROUP_DST   9
+
+_Static_assert(DISP_FB_W == SNES_WIDTH / GROUP_SRC * GROUP_DST,
+               "画布宽度要等于 SNES 画面宽度做完 9:8 扩展的结果");
+_Static_assert(DISP_FB_H == SNES_HEIGHT,
+               "画布高度要和 SNES 可见行数一致");
+
+/* snes9x 的帧缓冲按 SNES_HEIGHT_EXTENDED(239) 行分配：少数游戏会切到
+ * 239 行模式。画布只有 224 行，多出来的 15 行直接不画（先不处理，
+ * SMW 全程是 224 行模式）。 */
+#define SNES_FB_BYTES   (SNES_WIDTH * 2 * SNES_HEIGHT_EXTENDED)
+
+/* 缓冲按 50 fps（PAL）的最大需求分配，每帧实际提交多少按卡带真实帧率算 ——
+ * 见 s_audio_frames。之前固定按 480 提交是个 bug：NTSC 60 fps 只需要 400，
+ * 多产的 20% 既白烧 CPU（snes9x 的 dsp.c 混音不便宜），又和 I2S 的消费速率对不上。 */
+#define SNES_AUDIO_MAX_FRAMES  AUDIO_OUTPUT_MAX_FRAMES_PER_PACKET
+
+/* memmap.c 分配 ROM 时会多要 64 KB「for mapping purposes」——
+ * 映射表以 32/64 KB 为粒度指进 ROM，末页可能越过实际文件尾。照抄这个余量。 */
+#define SNES_ROM_SLACK  (0x10000 + 0x200)
+
+/* 出厂跳帧数。0 = 每帧都画。改这个值重编就能对比帧率。 */
+#define SNES_FRAMESKIP  3
+
+/* 1 = 模拟照跑但完全不推屏，用来单独量 CPU+PPU 的耗时（对照 nes_emu.c 的 DIAG_TIMING）。 */
+#define SNES_DIAG_NO_BLIT  0
+
+/* 内部 SRAM 只腾得出约 179 KB（NES 那 128 KB 还回来之后），而想放进去的有：
+ * 帧缓冲 119 KB、WRAM 128 KB、VRAM 64 KB —— 任意两个都放不下。
+ * 这个开关用来实测哪一个进内部 SRAM 收益最大：
+ *   0 = 帧缓冲进内部（WRAM/VRAM 留 PSRAM）
+ *   1 = WRAM 进内部（帧缓冲退 PSRAM）
+ * 结论见 README 的排障记录。 */
+#define SNES_MEM_PROFILE   0
+
+/* 渲染目标（内部 SRAM）和推屏源（PSRAM）分开两块。
+ *
+ * 为什么不是两块内部 SRAM 的乒乓：一块 119 KB，内部总共只腾得出 ~179 KB
+ * （已经把 NES 那 128 KB 还回来之后），装不下第二块。
+ *
+ * 为什么也不是「单块 + 异步推屏」：display_stream 只在**提交下一帧**时阻塞，
+ * 不保护缓冲本身。核 1 还在推最后一条带时核 0 已经开始渲染下一帧，最后一条
+ * 会撕。
+ *
+ * 所以折中成：渲染始终写内部那块（最热，PPU 逐扫描线读写），画完 memcpy
+ * 到 PSRAM 影子缓冲再异步推。memcpy 约 2~3 ms，换掉同步推屏的 14 ms 阻塞。
+ * 反过来（渲染进 PSRAM）实测每渲染帧要多花 ~23 ms，差得远。 */
+static uint16_t *s_framebuf;    /* GFX.Screen，内部 SRAM，SNES_WIDTH x 239 */
+static uint16_t *s_present;     /* 推屏源，PSRAM */
+static int16_t  *s_soundbuf;
+static bool      s_audio_ok;
+static int       s_audio_frames; /* 每帧提交多少立体声帧，由卡带帧率决定 */
+
+/* 条带回调 —— 跑在核 1 上。做两件事：横向 9:8 扩展，以及小端转大端。
+ *
+ * snes9x 直接产出主机字节序（小端）的 RGB565，而本项目的帧缓冲存的是
+ * 字节交换后的大端值（见 display.h 的 RGB565 宏）。所以这里每个像素都要
+ * __builtin_bswap16 —— 在已经要逐像素搬运的循环里，这一条指令基本白送。
+ *
+ * 内循环按 8 个源像素一组展开，写 9 个（最后一个重复），和 nes_strip 同构。 */
+static void snes_strip(uint16_t *strip, int y0, int h, void *ctx)
+{
+    const uint16_t *frame = ctx;
+
+    for (int r = 0; r < h; r++) {
+        const uint16_t *src = frame + (size_t)(y0 + r) * SNES_WIDTH;
+        uint16_t       *dst = strip + (size_t)r * DISP_FB_W;
+
+        for (int g = SNES_WIDTH / GROUP_SRC; g > 0; g--) {
+            uint16_t c0 = __builtin_bswap16(src[0]);
+            uint16_t c1 = __builtin_bswap16(src[1]);
+            uint16_t c2 = __builtin_bswap16(src[2]);
+            uint16_t c3 = __builtin_bswap16(src[3]);
+            uint16_t c4 = __builtin_bswap16(src[4]);
+            uint16_t c5 = __builtin_bswap16(src[5]);
+            uint16_t c6 = __builtin_bswap16(src[6]);
+            uint16_t c7 = __builtin_bswap16(src[7]);
+
+            dst[0] = c0; dst[1] = c1; dst[2] = c2; dst[3] = c3;
+            dst[4] = c4; dst[5] = c5; dst[6] = c6; dst[7] = c7;
+            dst[8] = c7;                /* 复制点落在 8 像素图块边界上 */
+
+            src += GROUP_SRC;
+            dst += GROUP_DST;
+        }
+    }
+}
+
+static void black_strip(uint16_t *strip, int y0, int h, void *ctx)
+{
+    display_clear(C_BLACK);
+}
+
+/* ---- snes9x 要求宿主实现的回调（src/display.h 里那一组） ---- */
+
+bool S9xInitDisplay(void)
+{
+    GFX.Pitch  = SNES_WIDTH * 2;
+    GFX.ZPitch = SNES_WIDTH;
+    GFX.Screen = (uint8_t *)s_framebuf;   /* snes9x 里 Screen 是字节指针 */
+
+    /* 这三块是渲染中间结果，只被 gfx.c/tile.c 读写，不参与 DMA，放 PSRAM。
+     * 合计约 245 KB —— 内部 SRAM 放不下（NES 那两块 64 KB vidbuf 已经占了）。 */
+    GFX.SubScreen  = heap_caps_malloc(GFX.Pitch * SNES_HEIGHT_EXTENDED,
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    GFX.ZBuffer    = heap_caps_malloc(GFX.ZPitch * SNES_HEIGHT_EXTENDED,
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    GFX.SubZBuffer = heap_caps_malloc(GFX.ZPitch * SNES_HEIGHT_EXTENDED,
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    return GFX.Screen && GFX.SubScreen && GFX.ZBuffer && GFX.SubZBuffer;
+}
+
+void S9xDeinitDisplay(void)
+{
+}
+
+/* 手柄 8 键 -> SNES 12 键。X/Y/L/R 暂时无实体键可映射：
+ * 验证阶段不做组合键，SMW 只用到 B(跳) / Y(跑) / 方向 / START。
+ * 所以把 Y 也挂在 B 键上（跑步键长按），A 键给 SNES 的 B。 */
+static uint32_t map_pad(uint8_t state)
+{
+    uint32_t pad = 0;
+    if (state & GAMEPAD_BIT_RIGHT)  pad |= SNES_RIGHT_MASK;
+    if (state & GAMEPAD_BIT_LEFT)   pad |= SNES_LEFT_MASK;
+    if (state & GAMEPAD_BIT_UP)     pad |= SNES_UP_MASK;
+    if (state & GAMEPAD_BIT_DOWN)   pad |= SNES_DOWN_MASK;
+    if (state & GAMEPAD_BIT_A)      pad |= SNES_B_MASK;   /* 跳 */
+    if (state & GAMEPAD_BIT_B)      pad |= SNES_Y_MASK;   /* 跑 / 吐火 */
+    if (state & GAMEPAD_BIT_SELECT) pad |= SNES_SELECT_MASK;
+    if (state & GAMEPAD_BIT_START)  pad |= SNES_START_MASK;
+    return pad;
+}
+
+uint32_t S9xReadJoypad(int32_t port)
+{
+    if (port != 0) return 0;
+    return map_pad(input_serial_poll() | input_gamepad_poll() | input_usb_poll());
+}
+
+bool S9xReadMousePosition(int32_t which1, int32_t *x, int32_t *y, uint32_t *buttons)
+{
+    return false;
+}
+
+bool S9xReadSuperScopePosition(int32_t *x, int32_t *y, uint32_t *buttons)
+{
+    return false;
+}
+
+void S9xToggleSoundChannel(int32_t channel)
+{
+}
+
+/* S9xNextController() 故意不在这里实现 —— ppu.c:1824 已经有一份，
+ * 重复定义会在链接期打架。display.h 把它列进「宿主要实现」是上游的笔误。 */
+
+bool JustifierOffscreen(void)
+{
+    return true;
+}
+
+void JustifierButtons(uint32_t *justifiers)
+{
+    (void)justifiers;
+}
+
+/* ---- 启动 ---- */
+
+static esp_err_t alloc_buffers(void)
+{
+    /* 帧缓冲优先要内部 SRAM：这是 PPU 逐扫描线写、核 1 逐像素读的最热内存，
+     * NES 那边把 vidbuf 放 PSRAM 会让渲染从 2ms 涨到 8.5ms（见 AGENTS.md）。
+     * 但 SNES 是 RGB565 不是 8 位调色板，一块就要 122 KB，多半抢不到 ——
+     * 抢不到就退 PSRAM，并把实际落点打出来，因为它直接决定帧率数据怎么读。 */
+    s_framebuf = SNES_MEM_PROFILE == 0
+               ? heap_caps_calloc(1, SNES_FB_BYTES,
+                                  MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+               : NULL;   /* profile 1 把内部 SRAM 留给 WRAM */
+    if (s_framebuf) {
+        ESP_LOGI(TAG, "帧缓冲 %d KB 拿到了内部 SRAM", SNES_FB_BYTES / 1024);
+    } else {
+        s_framebuf = heap_caps_calloc(1, SNES_FB_BYTES,
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        ESP_LOGW(TAG, "帧缓冲 %d KB 只能放 PSRAM —— 渲染会明显变慢",
+                 SNES_FB_BYTES / 1024);
+    }
+    if (!s_framebuf) return ESP_ERR_NO_MEM;
+
+    /* 推屏源只被核 1 顺序读一遍，PSRAM 的延迟藏在 SPI DMA 后面，不心疼。 */
+    s_present = heap_caps_calloc(1, SNES_FB_BYTES,
+                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_present) return ESP_ERR_NO_MEM;
+
+    s_soundbuf = heap_caps_calloc(SNES_AUDIO_MAX_FRAMES * 2, sizeof(int16_t),
+                                  MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    return s_soundbuf ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+/* S9xInitMemory() 会自己 malloc 一块 ROM 缓冲，且贪心地从 6 MB 往下试
+ * （memmap.c 的 AllocSizes 表）—— 在 8 MB PSRAM 上第一档就成功，白占 6 MB。
+ * 而 LoadROM(NULL) 是拿 ROM_AllocSize 当文件长度用的，所以那块必须换成
+ * 「正好等于 ROM 大小」的缓冲，否则 snes9x 会以为这是个 6 MB 的卡带。
+ *
+ * 顺便也解决了 mmap 只读的问题：LoadROM 会就地改写（跳 512 字节头、
+ * 补映射），不能直接喂 flash 指针。 */
+/* 把 WRAM 从 PSRAM 挪进内部 SRAM。必须在 LoadROM() 之前 —— 它会走到
+ * S9xReset()，那里 memset(Memory.RAM, 0x55, RAM_SIZE) 负责初始化内容。 */
+static void relocate_wram_internal(void)
+{
+    uint8_t *ram = heap_caps_malloc(RAM_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!ram) {
+        ESP_LOGW(TAG, "WRAM %d KB 挪不进内部 SRAM，留在 PSRAM", RAM_SIZE / 1024);
+        return;
+    }
+    free(Memory.RAM);
+    Memory.RAM = ram;
+    ESP_LOGI(TAG, "WRAM %d KB 已挪进内部 SRAM", RAM_SIZE / 1024);
+}
+
+static esp_err_t install_rom(const uint8_t *rom, size_t rom_size)
+{
+    if (Memory.ROM) {
+        free(Memory.ROM - Memory.ROM_Offset);
+        Memory.ROM = NULL;
+        Memory.ROM_Offset = 0;
+    }
+
+    uint8_t *buf = heap_caps_malloc(rom_size + SNES_ROM_SLACK,
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) return ESP_ERR_NO_MEM;
+
+    memcpy(buf, rom, rom_size);
+    memset(buf + rom_size, 0, SNES_ROM_SLACK);
+
+    Memory.ROM           = buf;
+    Memory.ROM_AllocSize = rom_size;   /* LoadROM(NULL) 把它当文件长度 */
+    return ESP_OK;
+}
+
+esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
+{
+    if (!rom || rom_size < 1024) return ESP_ERR_INVALID_ARG;
+
+    printf("\nROM: %s  (%u 字节，SNES)\n", name ? name : "(unknown)",
+           (unsigned)rom_size);
+    display_stream_sync(black_strip, NULL);
+
+    /* 先把 NES 预留的 128 KB 内部 SRAM 拿回来 —— 我们的帧缓冲要 119 KB，
+     * 不这么做就只能落 PSRAM（实测那样渲染慢一倍多）。 */
+    nes_emu_release_prealloc();
+
+    esp_err_t err = alloc_buffers();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "SNES 缓冲分配失败：需要 2x%d KB 帧缓冲 + %d 字节音频缓冲",
+                 SNES_FB_BYTES / 1024, SNES_AUDIO_MAX_FRAMES * 4);
+        return err;
+    }
+
+    esp_err_t audio_err = audio_output_init(AUDIO_OUTPUT_SAMPLE_RATE);
+    s_audio_ok = (audio_err == ESP_OK);
+    if (!s_audio_ok) {
+        ESP_LOGW(TAG, "MAX98357 音频未启动：%s，继续静音运行",
+                 esp_err_to_name(audio_err));
+    }
+
+    /* 这一组取值照抄 retro-go main_snes.c，都是 SNES 时序常量，不是可调参数。 */
+    Settings.CyclesPercentage   = 100;
+    Settings.H_Max              = SNES_CYCLES_PER_SCANLINE;
+    Settings.FrameTimePAL       = 20000;
+    Settings.FrameTimeNTSC      = 16667;
+    Settings.ControllerOption   = SNES_JOYPAD;
+    Settings.HBlankStart        = (256 * Settings.H_Max) / SNES_HCOUNTER_MAX;
+    Settings.SoundPlaybackRate  = AUDIO_OUTPUT_SAMPLE_RATE;
+    Settings.SoundInputRate     = AUDIO_OUTPUT_SAMPLE_RATE;
+    Settings.DisableSoundEcho   = false;
+    Settings.InterpolatedSound  = true;
+
+    if (!S9xInitDisplay())  { ESP_LOGE(TAG, "显示初始化失败");   return ESP_ERR_NO_MEM; }
+    if (!S9xInitMemory())   { ESP_LOGE(TAG, "内存初始化失败");   return ESP_ERR_NO_MEM; }
+    if (!S9xInitAPU())      { ESP_LOGE(TAG, "APU 初始化失败");   return ESP_FAIL; }
+    if (!S9xInitSound(0, 0)){ ESP_LOGE(TAG, "声音初始化失败");   return ESP_FAIL; }
+    if (!S9xInitGFX())      { ESP_LOGE(TAG, "图形初始化失败");   return ESP_FAIL; }
+
+#if SNES_MEM_PROFILE == 1
+    relocate_wram_internal();
+#endif
+
+    err = install_rom(rom, rom_size);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "ROM 拷入 PSRAM 失败（需要 %u KB）",
+                 (unsigned)((rom_size + SNES_ROM_SLACK) / 1024));
+        return err;
+    }
+    if (!LoadROM(NULL)) {
+        ESP_LOGE(TAG, "ROM 解析失败（不是受支持的 SNES 卡带？）");
+        return ESP_FAIL;
+    }
+
+    S9xSetPlaybackRate(Settings.SoundPlaybackRate);
+
+    esp_err_t rgb_err = rgb_led_start_rainbow();
+    if (rgb_err != ESP_OK) {
+        ESP_LOGW(TAG, "板载 RGB 彩虹效果未启动：%s", esp_err_to_name(rgb_err));
+    }
+
+    input_serial_init();
+    input_usb_init();
+    input_gamepad_init();
+
+    printf("卡带：%s  映射 %s  %d fps  ROM %u KB\n",
+           Memory.ROMName, Memory.LoROM ? "LoROM" : "HiROM",
+           (int)Memory.ROMFramesPerSecond,
+           (unsigned)(Memory.CalculatedSize / 1024));
+    printf("内部 RAM 剩余 %u KB，PSRAM 剩余 %u KB\n",
+           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+    printf("开始模拟，跳帧 %d（画 1 帧跳 %d 帧）。\n\n",
+           SNES_FRAMESKIP, SNES_FRAMESKIP);
+
+    const int fps = Memory.ROMFramesPerSecond ?: 60;
+    const int frame_period_us = 1000000 / fps;
+
+    /* 每帧该产多少采样由卡带帧率决定：NTSC 400，PAL 480。
+     * 取错了不只是浪费 CPU —— I2S 按固定速率消费，产多了队列会涨。 */
+    s_audio_frames = AUDIO_OUTPUT_SAMPLE_RATE / fps;
+    if (s_audio_frames > SNES_AUDIO_MAX_FRAMES) s_audio_frames = SNES_AUDIO_MAX_FRAMES;
+
+    int     skip_frames  = 0;
+    int     emu_frames   = 0;      /* 模拟了多少帧 */
+    int     drawn_frames = 0;      /* 真正推屏多少帧 */
+    int64_t emu_us       = 0;
+    int64_t blit_us      = 0;
+    int64_t audio_us     = 0;
+    int64_t stat_t0      = esp_timer_get_time();
+    int64_t next_frame   = stat_t0;
+
+    while (1) {
+        bool draw_frame = (skip_frames == 0);
+
+        /* 换渲染目标必须在 S9xMainLoop 之前 —— S9xStartScreenRefresh 会拿
+         * 当时的 GFX.Screen 去算 GFX.Delta（gfx.c:285）。这里只有一块渲染
+         * 缓冲，所以是常量，但保持这个顺序，将来真做乒乓时不会踩坑。 */
+        IPPU.RenderThisFrame = draw_frame;
+        GFX.Screen = (uint8_t *)s_framebuf;
+
+        int64_t t0 = esp_timer_get_time();
+        S9xMainLoop();
+        int64_t t1 = esp_timer_get_time();
+        emu_us += t1 - t0;
+
+#if !SNES_DIAG_NO_BLIT
+        if (draw_frame) {
+            /* 拷到影子缓冲再异步提交：display_stream 立刻返回，条带转换和
+             * DMA 全在核 1 上跑，核 0 直接去模拟下一帧。只有上一帧还没推完
+             * 时才会在这里阻塞 —— 天然的背压。 */
+            memcpy(s_present, s_framebuf, SNES_FB_BYTES);
+            display_stream(snes_strip, s_present);
+            drawn_frames++;
+        }
+#endif
+        int64_t t2 = esp_timer_get_time();
+        blit_us += t2 - t1;
+
+        /* 非 blargg 路径：每帧自己混音再交给 I2S。 */
+        if (s_audio_ok && !audio_output_is_muted()) {
+            S9xMixSamples((int16_t *)s_soundbuf, s_audio_frames * 2);
+            audio_output_submit_stereo(s_soundbuf, s_audio_frames);
+        }
+        audio_us += esp_timer_get_time() - t2;
+
+        skip_frames = (skip_frames == 0) ? SNES_FRAMESKIP : skip_frames - 1;
+
+        next_frame += frame_period_us;
+        int64_t now = esp_timer_get_time();
+        if (next_frame > now) {
+            int64_t wait_us = next_frame - now;
+            if (wait_us > 1500) vTaskDelay(pdMS_TO_TICKS(wait_us / 1000));
+            while (esp_timer_get_time() < next_frame) { }
+        } else {
+            next_frame = now;
+            vTaskDelay(1);   /* 跑不满时也要喂 idle task / 看门狗 */
+        }
+
+        emu_frames++;
+        now = esp_timer_get_time();
+        if (now - stat_t0 >= 1000000) {
+            int emu_fps10  = (int)(emu_frames * 10000000LL / (now - stat_t0));
+            int draw_fps10 = (int)(drawn_frames * 10000000LL / (now - stat_t0));
+            printf("SNES 模拟 %d.%d fps / 推屏 %d.%d fps  "
+                   "(模拟 %.1f + 拷贝 %.1f + 音频 %.1f ms/帧，CPU 余量 %d%%)\n",
+                   emu_fps10 / 10, emu_fps10 % 10,
+                   draw_fps10 / 10, draw_fps10 % 10,
+                   (float)emu_us / 1000.0f / emu_frames,
+                   (float)blit_us / 1000.0f / emu_frames,
+                   (float)audio_us / 1000.0f / emu_frames,
+                   100 - (int)((emu_us + blit_us + audio_us) * 100 /
+                               (now - stat_t0)));
+            emu_frames = drawn_frames = 0;
+            emu_us = blit_us = audio_us = 0;
+            stat_t0 = now;
+        }
+    }
+
+    return ESP_OK;
+}

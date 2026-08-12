@@ -1,12 +1,12 @@
 # 注意：一旦给 main 显式写了 REQUIRES，它就不再自动依赖全部组件了，
 # 所以 display.c / nes_emu.c 用到的驱动都得在这里列全。
 idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
-                            "gbc_emu.c"
+                            "gbc_emu.c" "snes_emu.c"
                             "rgb_led.c" "audio_output.c"
                             "input_serial.c" "input_gamepad.c" "input_usb.c"
                             "rom_store.c" "rom_menu.c"
                        INCLUDE_DIRS "."
-                       REQUIRES nofrendo gnuboy
+                       REQUIRES nofrendo gnuboy snes9x
                                 esp_partition  # roms 分区 mmap
                                 esp_lcd
                                 esp_driver_spi

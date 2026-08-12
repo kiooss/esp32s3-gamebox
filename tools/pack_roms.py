@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""把 roms/ 下的 NES / GB / GBC 游戏打包进 flash 的 roms 分区。
+"""把 roms/ 下的 NES / GB / GBC / SNES 游戏打包进 flash 的 roms 分区。
 
 镜像格式（小端，和 ESP32 一致）：
 
@@ -7,7 +7,7 @@
     偏移 8    count                      uint32，条目数
     偏移 12   目录项 x count，每项 52 字节：
                   name    char[40]       显示名，NUL 结尾
-                  system  uint32         1=NES, 2=GB, 3=GBC
+                  system  uint32         1=NES, 2=GB, 3=GBC, 4=SNES
                   offset  uint32         ROM 数据在**镜像**内的绝对偏移
                   size    uint32         ROM 字节数
     之后      各 ROM 数据，4 字节对齐
@@ -37,7 +37,15 @@ assert ENTRY_SIZE == 52, ENTRY_SIZE
 SYSTEM_NES = 1
 SYSTEM_GB = 2
 SYSTEM_GBC = 3
-SYSTEM_NAMES = {SYSTEM_NES: "NES", SYSTEM_GB: "GB", SYSTEM_GBC: "GBC"}
+SYSTEM_SNES = 4
+SYSTEM_NAMES = {
+    SYSTEM_NES: "NES",
+    SYSTEM_GB: "GB",
+    SYSTEM_GBC: "GBC",
+    SYSTEM_SNES: "SNES",
+}
+
+EXTENSIONS = (".nes", ".gb", ".gbc", ".sfc", ".smc")
 
 # ROM 站惯例的标记：(U) (E) (Japan, USA) [!] [!p] (PRG0) 等等。
 # 显示名里不需要，剥掉。
@@ -77,6 +85,32 @@ def gameboy_system(data):
     return SYSTEM_GBC if data[0x143] in (0x80, 0xC0) else SYSTEM_GB
 
 
+def snes_strip_copier_header(data):
+    """老式拷贝机会在文件头加 512 字节。剥掉再打包，省得板子上再判一次。"""
+    if len(data) % 0x400 == 512:
+        return data[512:]
+    return data
+
+
+def snes_ok(data):
+    """SNES 没有 magic，只能查内部头：checksum ^ complement == 0xFFFF，
+    且标题是可打印 ASCII。LoROM(0x7FC0) / HiROM(0xFFC0) 各试一次。
+    和 main/rom_store.c 的 snes_header_ok() 是同一套判据，改一处要改两处。"""
+    if len(data) < 0x20000:
+        return None
+    for base in (0x7FC0, 0xFFC0):
+        if base + 0x20 > len(data):
+            continue
+        title = data[base:base + 21]
+        if any(c != 0 and not (0x20 <= c <= 0x7E) for c in title):
+            continue
+        comp = int.from_bytes(data[base + 0x1C:base + 0x1E], "little")
+        check = int.from_bytes(data[base + 0x1E:base + 0x20], "little")
+        if check ^ comp == 0xFFFF:
+            return SYSTEM_SNES
+    return None
+
+
 def main():
     if len(sys.argv) != 3:
         sys.exit(__doc__)
@@ -85,10 +119,10 @@ def main():
     paths = sorted(
         os.path.join(rom_dir, f)
         for f in os.listdir(rom_dir)
-        if f.lower().endswith((".nes", ".gb", ".gbc"))
+        if f.lower().endswith(EXTENSIONS)
     )
     if not paths:
-        sys.exit("在 %s 里没找到 .nes/.gb/.gbc 文件" % rom_dir)
+        sys.exit("在 %s 里没找到 %s 文件" % (rom_dir, "/".join(EXTENSIONS)))
 
     roms = []
     for p in paths:
@@ -98,13 +132,16 @@ def main():
         system = SYSTEM_NES if ext == ".nes" and ines_ok(data) else None
         if ext in (".gb", ".gbc"):
             system = gameboy_system(data)
+        if ext in (".sfc", ".smc"):
+            data = snes_strip_copier_header(data)
+            system = snes_ok(data)
         if system is None:
             print("  跳过（ROM 头无效）: %s" % os.path.basename(p))
             continue
         roms.append((display_name(p), data, system))
 
     if not roms:
-        sys.exit("没有合法的 iNES 文件")
+        sys.exit("没有一个文件通过 ROM 头校验")
 
     # 数据区从目录表之后开始，且各 ROM 4 字节对齐。
     # 先算好每个 ROM 的偏移，再一次写出去。
@@ -130,7 +167,7 @@ def main():
     total = os.path.getsize(out_path)
     print("打包 %d 个 ROM -> %s (%.0f KB)" % (len(roms), out_path, total / 1024))
     for name, data, system in roms:
-        print("  %-3s %-36s %6.0f KB" % (
+        print("  %-4s %-36s %6.0f KB" % (
             SYSTEM_NAMES[system], name.decode("utf-8", "replace"),
             len(data) / 1024))
 

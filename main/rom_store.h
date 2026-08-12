@@ -26,9 +26,10 @@
 #define ROM_STORE_NAME_LEN 40
 
 typedef enum {
-    ROM_SYSTEM_NES = 1,
-    ROM_SYSTEM_GB  = 2,
-    ROM_SYSTEM_GBC = 3,
+    ROM_SYSTEM_NES  = 1,
+    ROM_SYSTEM_GB   = 2,
+    ROM_SYSTEM_GBC  = 3,
+    ROM_SYSTEM_SNES = 4,
 } rom_system_t;
 
 typedef struct {

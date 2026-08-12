@@ -29,6 +29,28 @@ static const char *TAG = "romstore";
 #define NES_ROM_MIN_SIZE  (16 + 16 * 1024)
 #define GB_ROM_MIN_SIZE   0x4000
 
+/* SNES 卡带最小 128 KB，且内部头必须整个落在 ROM 里（LoROM 在 0x7FC0）。 */
+#define SNES_ROM_MIN_SIZE 0x20000
+#define SNES_LOROM_HEADER 0x7FC0
+#define SNES_HIROM_HEADER 0xFFC0
+
+/* SNES 没有 magic。业界通行的判据是内部头里那对校验和：
+ * checksum ^ complement 必须等于 0xFFFF。再要求标题是可打印 ASCII，
+ * 基本不会把随机数据认成卡带。LoROM / HiROM 各试一次。 */
+static bool snes_header_ok(const uint8_t *rom, size_t size, size_t base)
+{
+    if (base + 0x20 > size) return false;
+
+    for (int i = 0; i < 21; i++) {
+        uint8_t c = rom[base + i];
+        if (c != 0 && (c < 0x20 || c > 0x7E)) return false;
+    }
+
+    uint32_t comp = (uint32_t)rom[base + 0x1C] | ((uint32_t)rom[base + 0x1D] << 8);
+    uint32_t ck   = (uint32_t)rom[base + 0x1E] | ((uint32_t)rom[base + 0x1F] << 8);
+    return (ck ^ comp) == 0xFFFF;
+}
+
 static rom_store_entry_t s_entries[ROM_STORE_MAX];
 static int  s_count = -1;       /* -1 = 还没试过 */
 
@@ -97,10 +119,11 @@ int rom_store_init(void)
 
         /* 每一条都验：数据落在分区内、不和目录表重叠、大小像个 ROM。
          * off + size 用 64 位算，避免 32 位回绕把越界算成合法。 */
-        size_t min_size = system == ROM_SYSTEM_NES ? NES_ROM_MIN_SIZE
-                                                   : GB_ROM_MIN_SIZE;
+        size_t min_size = system == ROM_SYSTEM_NES  ? NES_ROM_MIN_SIZE
+                        : system == ROM_SYSTEM_SNES ? SNES_ROM_MIN_SIZE
+                                                    : GB_ROM_MIN_SIZE;
         if ((system != ROM_SYSTEM_NES && system != ROM_SYSTEM_GB &&
-             system != ROM_SYSTEM_GBC) ||
+             system != ROM_SYSTEM_GBC && system != ROM_SYSTEM_SNES) ||
             (uint64_t)off + size > part->size || off < dir_end ||
             size < min_size) {
             ESP_LOGW(TAG, "第 %u 条越界或过小（off=%u size=%u），跳过",
@@ -119,10 +142,16 @@ int rom_store_init(void)
         /* 再查一次各系统最便宜但可靠的头特征。GB/GBC 的 0x104 开始是固定
          * Nintendo logo；这里比只信扩展名强，也不会把任意数据喂给核心。 */
         static const uint8_t gb_logo_head[4] = {0xCE, 0xED, 0x66, 0x66};
-        bool header_ok = system == ROM_SYSTEM_NES
-                       ? memcmp(img + off, "NES\x1a", 4) == 0
-                       : size >= 0x150 &&
-                         memcmp(img + off + 0x104, gb_logo_head, 4) == 0;
+        bool header_ok;
+        if (system == ROM_SYSTEM_NES) {
+            header_ok = memcmp(img + off, "NES\x1a", 4) == 0;
+        } else if (system == ROM_SYSTEM_SNES) {
+            header_ok = snes_header_ok(img + off, size, SNES_LOROM_HEADER) ||
+                        snes_header_ok(img + off, size, SNES_HIROM_HEADER);
+        } else {
+            header_ok = size >= 0x150 &&
+                        memcmp(img + off + 0x104, gb_logo_head, 4) == 0;
+        }
         if (!header_ok) {
             ESP_LOGW(TAG, "第 %u 条（%s）ROM 头无效，跳过", (unsigned)i, name);
             continue;

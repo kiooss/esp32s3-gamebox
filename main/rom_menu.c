@@ -61,11 +61,13 @@ static uint8_t poll_input(void)
  * 重复执行这段的开销可以忽略。 */
 typedef struct { int count, sel; bool muted; } draw_args_t;
 
+/* 一律补到 4 字符宽：加了 SNES 之后名字列才还能对齐成一竖条。 */
 static const char *system_name(rom_system_t system)
 {
-    if (system == ROM_SYSTEM_GBC) return "GBC";
-    if (system == ROM_SYSTEM_GB) return "GB ";
-    return "NES";
+    if (system == ROM_SYSTEM_SNES) return "SNES";
+    if (system == ROM_SYSTEM_GBC) return "GBC ";
+    if (system == ROM_SYSTEM_GB) return "GB  ";
+    return "NES ";
 }
 
 static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)

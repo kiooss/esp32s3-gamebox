@@ -318,6 +318,19 @@ esp_err_t nes_emu_prealloc(void)
     return ESP_OK;
 }
 
+/* 选中的不是 NES 时把这 128 KB 内部 SRAM 还回去。
+ *
+ * prealloc 是在开机选单**之前**跑的（顺序被 display_init 逼死了），
+ * 那时还不知道用户会选哪个平台。NES 之外的核自己也要大块内部内存
+ * （SNES 的 RGB565 帧缓冲就要 119 KB），不还就只能退 PSRAM。 */
+void nes_emu_release_prealloc(void)
+{
+    for (int i = 0; i < 2; i++) {
+        heap_caps_free(s_vidbuf[i]);
+        s_vidbuf[i] = NULL;
+    }
+}
+
 esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
 {
     /* 没给 ROM 就用编译期嵌进来的那个 —— roms 分区还没烧过时的回退路径。 */
