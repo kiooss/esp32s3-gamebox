@@ -18,12 +18,10 @@
 /* 游戏装载后初始化 MAX98357 和音频消费任务。失败时模拟器仍可静音运行。 */
 esp_err_t audio_output_init(uint32_t sample_rate);
 
-/* 在开机选单前读取持久化声音设置。默认开；NVS 不可用时仍可在本次运行中
- * 切换，只是重启后不会记住。要放在 nes_emu_prealloc() 之后，避免 NVS 初始化
- * 先占碎内部 SRAM，破坏两块 64 KB NES 视频缓冲的连续分配。 */
+/* 在开机选单前把声音重置为默认开启。开关只在本次运行中有效，不读写 NVS。 */
 esp_err_t audio_output_settings_init(void);
 
-/* 菜单里的声音开关。set 会立即作用并尝试写入 NVS；写入失败不回滚本次状态。 */
+/* 菜单里的声音开关；set 立即作用，但重启后一定恢复默认开启。 */
 bool audio_output_is_muted(void);
 esp_err_t audio_output_set_muted(bool muted);
 

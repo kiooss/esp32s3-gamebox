@@ -116,8 +116,7 @@ void app_main(void)
         return;
     }
 
-    /* NVS 可能从内部堆分配管理结构，必须等 NES 两块 64 KB 连续视频缓冲
-     * 先占好位置；声音设置失败不影响游戏，只退回默认开启且不持久化。 */
+    /* 声音开关只在当前运行中有效；每次启动都先恢复默认开启。 */
     audio_output_settings_init();
 
     if (display_init() != ESP_OK) {

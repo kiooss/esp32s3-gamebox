@@ -140,7 +140,7 @@ esp_err_t snes_save_init(uint32_t rom_crc)
     return ESP_OK;
 }
 
-bool snes_save_load_latest(uint32_t rom_crc)
+static bool load_slot(uint32_t rom_crc, bool previous)
 {
     if (!s_mounted) return false;
 
@@ -163,7 +163,15 @@ bool snes_save_load_latest(uint32_t rom_crc)
         return false;
     }
 
-    int candidates[2] = { first, second };
+    bool try_previous = previous && second >= 0;
+    int candidates[2] = {
+        try_previous ? second : first,
+        try_previous ? first : second,
+    };
+    if (previous && second < 0) {
+        ESP_LOGW(TAG, "没有上一份 SMW 即时存档，仍恢复最新一份");
+    }
+
     for (int i = 0; i < 2 && candidates[i] >= 0; i++) {
         int slot = candidates[i];
         if (!state_matches(&meta[slot], slot)) {
@@ -172,15 +180,26 @@ bool snes_save_load_latest(uint32_t rom_crc)
         }
         int64_t t0 = esp_timer_get_time();
         if (S9xLoadState(s_state_path[slot])) {
-            ESP_LOGI(TAG, "已恢复 SMW 即时存档：槽 %d，序号 %" PRIu32
+            ESP_LOGI(TAG, "已恢复%s SMW 即时存档：槽 %d，序号 %" PRIu32
                      "，%" PRIu32 " 字节，耗时 %lld ms",
-                     slot, meta[slot].sequence, meta[slot].state_size,
+                     try_previous && i == 0 ? "上一份" : "", slot,
+                     meta[slot].sequence, meta[slot].state_size,
                      (esp_timer_get_time() - t0) / 1000);
             return true;
         }
         ESP_LOGW(TAG, "槽 %d 通过 CRC，但 Snes9x 拒绝加载", slot);
     }
     return false;
+}
+
+bool snes_save_load_latest(uint32_t rom_crc)
+{
+    return load_slot(rom_crc, false);
+}
+
+bool snes_save_load_previous(uint32_t rom_crc)
+{
+    return load_slot(rom_crc, true);
 }
 
 bool snes_save_write(uint32_t rom_crc)

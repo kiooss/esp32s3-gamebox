@@ -65,7 +65,7 @@ Flash 和 PSRAM 是两套独立资源。ROM 分区的 mmap 只消耗 Flash 地�
 
 | 分区 | 起点 | 分配大小 | 当前用途 |
 |---|---:|---:|---|
-| NVS | `0x009000` | 24 KiB | 声音开关等持久配置 |
+| NVS | `0x009000` | 24 KiB | ESP-IDF 预留的持久配置空间 |
 | PHY init | `0x00F000` | 4 KiB | ESP-IDF PHY 数据 |
 | factory app | `0x010000` | 1 MiB | 固件；六键 + 即时存档参考构建约 968 KiB，余约 79 KiB |
 | roms | `0x110000` | 14 MiB | 当前参考镜像 10,848,792 字节（约 10.35 MiB） |

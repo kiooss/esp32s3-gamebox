@@ -159,15 +159,11 @@ bool rom_menu_pick(const uint8_t **data, size_t *size, const char **name,
         uint8_t edge = now & ~prev;     /* 这一帧新按下的位 */
         prev = now;
 
-        /* B 在开机选单里没有游戏语义，正好做声音开关；进游戏后仍完整保留
-         * 原来的 B（跑/发射），不会占掉任何模拟器按键组合。 */
+        /* B 在开机选单里没有游戏语义，正好做本次开机的声音开关；进游戏后
+         * 仍完整保留原来的 B（跑/发射），重启则总是恢复默认开启。 */
         if (edge & NES_PAD_B) {
             bool muted = !audio_output_is_muted();
-            esp_err_t err = audio_output_set_muted(muted);
-            if (err != ESP_OK) {
-                ESP_LOGW(TAG, "声音已%s，但保存失败：%s",
-                         muted ? "关闭" : "开启", esp_err_to_name(err));
-            }
+            audio_output_set_muted(muted);
             draw(count, sel);
             continue;
         }

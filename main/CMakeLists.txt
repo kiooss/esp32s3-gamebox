@@ -20,7 +20,6 @@ idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
                                 esp_adc         # 摇杆走 ADC1
                                 esp_timer
                                 esp_hw_support # ROM CRC 与存档文件 CRC
-                                nvs_flash      # 记住菜单里的声音开关
                                 fatfs          # SMW 即时存档，底层自动带 wear levelling
                                 spi_flash      # 提供 esp_flash.h
                        # 这里登记的 ROM 只是「可选」，不是全都进固件 —— 没被

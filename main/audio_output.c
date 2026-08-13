@@ -19,8 +19,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
-#include "nvs.h"
-#include "nvs_flash.h"
 
 static const char *TAG = "audio";
 
@@ -30,9 +28,6 @@ static const char *TAG = "audio";
 #define AUDIO_QUEUE_FRAMES 4
 #define AUDIO_VOLUME_SHIFT 2       /* 除以 4：先从 25% 软件音量开始，避免突然过响 */
 #define AUDIO_FADE_MS      20      /* 开关时缓变，避免 MAX98357 突然跳变发出爆音 */
-
-#define SETTINGS_NAMESPACE "gamebox"
-#define SETTINGS_SOUND_KEY "sound_on"
 
 typedef struct {
     uint16_t sample_count;
@@ -47,39 +42,14 @@ static uint32_t s_dropped;
 static uint32_t s_write_errors;
 static uint32_t s_sample_rate;
 static atomic_bool s_muted = ATOMIC_VAR_INIT(false);
-static bool s_nvs_ready;
 
 esp_err_t audio_output_settings_init(void)
 {
-    esp_err_t err = nvs_flash_init();
-    if (err != ESP_OK) {
-        /* 这里故意不自动 nvs_flash_erase()。整片 NVS 以后还可能放别的设置，
-         * 声音记忆失败不值得用清空所有配置来换。 */
-        ESP_LOGW(TAG, "NVS 初始化失败：%s，声音默认开启且本次设置不保存",
-                 esp_err_to_name(err));
-        atomic_store_explicit(&s_muted, false, memory_order_relaxed);
-        return err;
-    }
-    s_nvs_ready = true;
-
-    uint8_t sound_on = 1;
-    nvs_handle_t handle;
-    err = nvs_open(SETTINGS_NAMESPACE, NVS_READONLY, &handle);
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
-        err = ESP_OK;              /* 第一次开机：保持默认开，不急着写 flash */
-    } else if (err == ESP_OK) {
-        esp_err_t read_err = nvs_get_u8(handle, SETTINGS_SOUND_KEY, &sound_on);
-        nvs_close(handle);
-        if (read_err != ESP_OK && read_err != ESP_ERR_NVS_NOT_FOUND) err = read_err;
-    }
-
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "读取声音设置失败：%s，使用默认开启", esp_err_to_name(err));
-        sound_on = 1;
-    }
-    atomic_store_explicit(&s_muted, sound_on == 0, memory_order_relaxed);
-    ESP_LOGI(TAG, "声音设置：%s", sound_on ? "开" : "关");
-    return err;
+    /* 声音开关只服务于当前菜单选择，不再读写 NVS。这样即使用户为了静音
+     * 临时关闭声音，按 RST 换游戏或重新上电后也一定从有声状态开始。 */
+    atomic_store_explicit(&s_muted, false, memory_order_relaxed);
+    ESP_LOGI(TAG, "声音默认：开（仅本次开机有效）");
+    return ESP_OK;
 }
 
 bool audio_output_is_muted(void)
@@ -90,17 +60,8 @@ bool audio_output_is_muted(void)
 esp_err_t audio_output_set_muted(bool muted)
 {
     atomic_store_explicit(&s_muted, muted, memory_order_relaxed);
-    ESP_LOGI(TAG, "声音：%s", muted ? "关" : "开");
-
-    if (!s_nvs_ready) return ESP_ERR_INVALID_STATE;
-
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(SETTINGS_NAMESPACE, NVS_READWRITE, &handle);
-    if (err != ESP_OK) return err;
-    err = nvs_set_u8(handle, SETTINGS_SOUND_KEY, muted ? 0 : 1);
-    if (err == ESP_OK) err = nvs_commit(handle);
-    nvs_close(handle);
-    return err;
+    ESP_LOGI(TAG, "声音：%s（仅本次开机有效）", muted ? "关" : "开");
+    return ESP_OK;
 }
 
 void audio_output_submit_stereo(const int16_t *samples, size_t frame_count)
@@ -206,8 +167,8 @@ esp_err_t audio_output_init(uint32_t sample_rate)
     if (sample_rate == 0) return ESP_ERR_INVALID_ARG;
     if (audio_output_is_muted()) {
         /* 开关只在开机选单里改，进入游戏后本局状态固定。静音时连 I2S、DMA、
-         * 队列和消费任务都不创建，比持续推零采样更省核 0 时间；submit 因
-         * s_queue 为空会立即返回。下次在菜单开启后重启游戏即可正常初始化。 */
+         * 队列和消费任务都不创建；各模拟器仍可推进自己的混音器状态，只把
+         * PCM 丢掉。下次在菜单开启后重启游戏即可正常初始化输出。 */
         ESP_LOGI(TAG, "声音关闭：不启动 MAX98357/I2S");
         return ESP_OK;
     }

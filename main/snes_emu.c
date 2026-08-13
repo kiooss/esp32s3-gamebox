@@ -378,22 +378,29 @@ esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
 
     S9xSetPlaybackRate(Settings.SoundPlaybackRate);
 
+    /* 菜单已经初始化过输入；这里再调仍是幂等的。提前到自动读档之前，才能让
+     * 用户在进入 SMW 时按住 X，非破坏性地试读双槽里的上一份存档。 */
+    input_serial_init();
+    input_usb_init();
+    input_gamepad_init();
+
     /* 目前只给 SMW 开即时存档。名称负责限制功能范围，ROM CRC 负责保证同名改版
      * 或不同区域版本不会误加载；分区挂载失败不影响模拟器本身。 */
     bool save_enabled = strcmp(Memory.ROMName, "SUPER MARIOWORLD") == 0;
     bool resumed = false;
+    bool recovered_previous = false;
     if (save_enabled && snes_save_init(rom_crc) == ESP_OK) {
-        resumed = snes_save_load_latest(rom_crc);
+        uint16_t launch_keys = input_serial_poll() | input_gamepad_poll() |
+                               input_usb_poll();
+        recovered_previous = (launch_keys & GAMEPAD_BIT_X) != 0;
+        resumed = recovered_previous ? snes_save_load_previous(rom_crc)
+                                     : snes_save_load_latest(rom_crc);
     }
 
     esp_err_t rgb_err = rgb_led_start_rainbow();
     if (rgb_err != ESP_OK) {
         ESP_LOGW(TAG, "板载 RGB 彩虹效果未启动：%s", esp_err_to_name(rgb_err));
     }
-
-    input_serial_init();
-    input_usb_init();
-    input_gamepad_init();
 
     printf("卡带：%s  映射 %s  %d fps  ROM %u KB\n",
            Memory.ROMName, Memory.LoROM ? "LoROM" : "HiROM",
@@ -406,7 +413,9 @@ esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
            SNES_FRAMESKIP, SNES_FRAMESKIP);
     if (save_enabled) {
         printf("SMW 即时存档：同时长按 SELECT + START 1 秒保存；下次启动自动恢复。%s\n\n",
-               resumed ? "本次已恢复上次状态。" : "目前没有可恢复状态。");
+               resumed ? (recovered_previous ? "本次按 X 尝试恢复了上一份状态。"
+                                             : "本次已恢复上次状态。")
+                       : "目前没有可恢复状态。");
     }
 
     const int fps = Memory.ROMFramesPerSecond ?: 60;
@@ -484,9 +493,12 @@ esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
         int64_t t2 = esp_timer_get_time();
         blit_us += t2 - t1;
 
-        /* 非 blargg 路径：每帧自己混音再交给 I2S。 */
+        /* S9xMixSamples 不只是“输出声音”：它还推进包络、采样位置等会被
+         * 即时存档序列化的混音器状态。即使菜单关了声音或 I2S 没起来也必须
+         * 每帧调用并丢掉 PCM，否则 APU 与 SoundData 停在不同时间点，静音时
+         * 保存出来的状态可能在恢复后一直无声。 */
+        S9xMixSamples((int16_t *)s_soundbuf, s_audio_frames * 2);
         if (s_audio_ok && !audio_output_is_muted()) {
-            S9xMixSamples((int16_t *)s_soundbuf, s_audio_frames * 2);
             audio_output_submit_stereo(s_soundbuf, s_audio_frames);
         }
         audio_us += esp_timer_get_time() - t2;
