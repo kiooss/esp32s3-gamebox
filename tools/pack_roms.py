@@ -111,6 +111,32 @@ def snes_ok(data):
     return None
 
 
+def roms_partition_size():
+    """从 partitions.csv 读 roms 分区的容量（字节）。读不到就返回 None 不拦。
+
+    故意不写死：分区大小改过一次（8 MB -> 14 MB），而这里的常量没跟着改，
+    结果是构建在打包这步失败、报的还是过期的「超过 8 MB」。宁可现读。
+    大小列支持 partitions.csv 用的十六进制，也支持 IDF 允许的 1M / 24K 写法。
+    """
+    csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            os.pardir, "partitions.csv")
+    try:
+        with open(csv_path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.split("#", 1)[0]
+                cols = [c.strip() for c in line.split(",")]
+                if len(cols) < 5 or cols[0] != "roms":
+                    continue
+                size = cols[4].upper()
+                scale = {"K": 1024, "M": 1024 * 1024}.get(size[-1:], 1)
+                if scale != 1:
+                    size = size[:-1]
+                return int(size, 0) * scale
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def main():
     if len(sys.argv) != 3:
         sys.exit(__doc__)
@@ -171,12 +197,14 @@ def main():
             SYSTEM_NAMES[system], name.decode("utf-8", "replace"),
             len(data) / 1024))
 
-    # 分区是 8 MB（见 partitions.csv）。超了 esptool 会报错，
-    # 但在这里说清楚更好定位。
-    limit = 8 * 1024 * 1024
-    if total > limit:
-        sys.exit("镜像 %.1f MB 超过 roms 分区的 8 MB —— "
-                 "减少游戏或把 partitions.csv 里的分区改大" % (total / 1048576))
+    # 超了 esptool 也会报错，但在这里说清楚更好定位。
+    # 容量从 partitions.csv 现读而不是写死：以前这里硬编码 8 MB，
+    # 分区扩到 14 MB 之后脚本仍按 8 MB 拦，白炸一次构建。
+    limit = roms_partition_size()
+    if limit and total > limit:
+        sys.exit("镜像 %.1f MB 超过 roms 分区的 %.0f MB —— "
+                 "减少游戏或把 partitions.csv 里的分区改大"
+                 % (total / 1048576, limit / 1048576))
 
 
 if __name__ == "__main__":

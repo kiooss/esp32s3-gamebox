@@ -1,9 +1,11 @@
 # ESP32-S3-WROOM-1-N16R8：16 MB flash
 #
 # 相比 IDF 内置的 partitions_singleapp.csv，只多了最后一行 roms 分区。
-# app 分区保持 1 MB —— 固件本体约 400 KB，还剩一半，没必要撑大。
+# app 分区保持 1 MB —— 固件本体 919 KB，只剩 126 KB。加 snes9x 之前才 400 KB，
+# 余量已经不多；components/snes9x/CMakeLists.txt 里用 -O2 而不是 -O3 就是为了
+# 不让 .text 撑爆这 1 MB。再加一个模拟器核心之前先量一下这里。
 #
-# roms 分区放 30 款中文精选游戏（约 6.3 MB），并为继续换游戏留出余量。
+# roms 分区放 35 款游戏（约 10.35 MB），并为继续换游戏留出余量。
 # 里面不是文件系统，
 # 是 tools/pack_roms.py 生成的自定义镜像：一张定长目录表 + 拼接的 ROM 数据。
 # 这样 main/rom_store.c 能直接 mmap，ROM 指针原样喂给 nofrendo，走的还是
@@ -12,9 +14,16 @@
 # 子类型 0x40 是「自定义 data」，故意不用 spiffs/littlefs：那些子类型会让
 # 工具链以为该跑文件系统检查。0x40 落在 IDF 给应用自定义留的范围里。
 #
-# 用到 9.1 MB，剩约 6.9 MB（以后仍可加存档或第二个 app 分区）。
+# roms 从 8 MB 扩到 14 MB：8 MB 时装 33 个游戏已经用掉 98%，加两个 SNES 卡带
+# （Mario Kart 512 KB、Yoshi's Island 2 MB）就溢出了。扩容几乎不要钱 ——
+# flash-roms 走 esptool write_flash，写的是 build/roms.bin 的实际字节数而不是
+# 分区容量，所以开大分区不增加烧录时间，尾部空着反而是浪费。
+# offset 没变，顶层 CMakeLists.txt 的 ROMS_OFFSET 不用跟着改。
+#
+# 用到 15.06 MB（止于 0xF10000），剩 960 KB。之前那 6.9 MB 余量就是被这次吃掉的，
+# 以后想加存档分区或第二个 app 分区，得从 roms 里让出来。
 # Name,     Type, SubType, Offset,   Size
 nvs,        data, nvs,     0x9000,   0x6000
 phy_init,   data, phy,     0xf000,   0x1000
 factory,    app,  factory, 0x10000,  0x100000
-roms,       data, 0x40,    0x110000, 0x800000
+roms,       data, 0x40,    0x110000, 0xE00000
