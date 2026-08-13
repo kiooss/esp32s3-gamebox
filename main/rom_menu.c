@@ -47,6 +47,7 @@ static const char *TAG = "menu";
 #define TEXT_X         8       /* 文字左缩进 */
 #define SOUND_X        184     /* `声音:开/关` 右边仍给页码留足空间 */
 #define HL_PAD         2       /* 反白块比文字左右各多出这么多 */
+#define LINE_CHARS_MAX ((DISP_FB_W - TEXT_X) / 6)
 #define C_DIVIDER      RGB565(48, 48, 48)
 
 #define POLL_MS     16      /* 约 60 Hz，和游戏帧率一个量级 */
@@ -59,7 +60,14 @@ static uint8_t poll_input(void)
 /* 条带回调：整份绘制列表每帧会被逐条带调用 BAND_COUNT 次，每次只画到落在
  * 当前条带里的那几行（display.c 的绘图原语自己裁）。菜单只有按键时才重画，
  * 重复执行这段的开销可以忽略。 */
-typedef struct { int count, sel; bool muted; } draw_args_t;
+typedef struct {
+    int count;
+    int sel;
+    int first;
+    int visible_count;
+    bool muted;
+    char lines[PAGE_ROWS][64];
+} draw_args_t;
 
 /* 一律补到 4 字符宽：加了 SNES 之后名字列才还能对齐成一竖条。 */
 static const char *system_name(rom_system_t system)
@@ -76,9 +84,8 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
     int count = a->count, sel = a->sel;
     int page = sel / PAGE_ROWS;
     int page_count = (count + PAGE_ROWS - 1) / PAGE_ROWS;
-    int first = page * PAGE_ROWS;
-    int last = first + PAGE_ROWS;
-    if (last > count) last = count;
+    int first = a->first;
+    int last = first + a->visible_count;
 
     display_clear(C_BLACK);
 
@@ -94,13 +101,8 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
                       C_DIVIDER);
 
     for (int i = first; i < last; i++) {
-        const rom_store_entry_t *e = rom_store_entry(i);
-        if (!e) break;
         int y = LIST_Y + (i - first) * ROW_H;
-
-        char line[48];
-        snprintf(line, sizeof(line), "%02d %s %s", i + 1,
-                 system_name(e->system), e->name);
+        const char *line = a->lines[i - first];
 
         if (i == sel) {
             /* 反白：先铺一条青色块，再在上面写黑字。
@@ -125,8 +127,25 @@ static void draw(int count, int sel)
     draw_args_t a = {
         .count = count,
         .sel = sel,
+        .first = (sel / PAGE_ROWS) * PAGE_ROWS,
         .muted = audio_output_is_muted(),
     };
+
+    int last = a.first + PAGE_ROWS;
+    if (last > count) last = count;
+    a.visible_count = last - a.first;
+    for (int i = a.first; i < last; i++) {
+        const rom_store_entry_t *e = rom_store_entry(i);
+        if (!e) break;
+
+        /* ROM 目录位于 flash mmap，格式化也会使用较深的 libc 调用栈。都在
+         * 菜单任务里先完成，核 1 的推屏回调只读取这份栈上快照，避免长列表
+         * 页面令 3 KB 推屏任务栈承受目录访问和 snprintf。 */
+        char *line = a.lines[i - a.first];
+        snprintf(line, sizeof(a.lines[0]), "%02d %s %s", i + 1,
+                 system_name(e->system), e->name);
+        line[LINE_CHARS_MAX] = '\0';
+    }
     display_stream_sync(draw_strip, &a);
 }
 
