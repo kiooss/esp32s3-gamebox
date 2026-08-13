@@ -22,8 +22,13 @@ ESP32-S3-DevKitC-1 兼容板（N16R8）+ ST7789 SPI 屏（240×320，横屏 320�
 - [x] JoyStick Shield 手柄 → `main/input_gamepad.c`（摇杆 + 四个按键，实测正常）
 - [x] USB HID 手柄 → `main/input_usb.c`（通用描述符解析，优先支持 Raspberry Pi/RetroPie 复古手柄）
 - [x] MAX98357 I2S 游戏音频
+- [~] 移植 SNES 模拟器核心（snes9x 2005）→ `components/snes9x/`。能跑但**达不到
+      可玩帧率**：SMW 45/60 fps、Mario Kart 50/60 fps，瓶颈是工作集（约 950 KB）
+      塞不进 179 KB 内部 SRAM。另外 Super FX / SA-1 / S-DD1 没有实现，
+      这类卡带会黑屏。详见 [`components/snes9x/README.gamebox.md`](components/snes9x/README.gamebox.md)
+- [x] ROM 分区扩到 14 MB（35 款游戏，镜像 10.35 MB）
 
-ROM 说明：商业 NES/GB/GBC ROM 都是版权物，**本仓库不包含**，需由使用者自备。
+ROM 说明：商业 NES/GB/GBC/SNES ROM 都是版权物，**本仓库不包含**，需由使用者自备。
 随仓库分发的三个 `.nes` 是 nofrendo 测试套件里的公有领域 homebrew，用于验证。
 
 ## 代码结构
@@ -337,7 +342,12 @@ NES 画面对不上的组合），以及 `display.c` 的 `BAND_LINES`（最好�
 `components/gnuboy/` 同样取自 Retro-Go，基线提交记录在该目录的
 `README.gamebox.md`，许可文本见 `components/gnuboy/COPYING`。
 
+`components/snes9x/` 也取自 Retro-Go，但**授权和上面两个不同**：
+`components/snes9x/src/LICENSE` 是 Snes9x 自己的许可证，不是 GPL，
+**明确禁止商业分发**。
+
 由于链接了 GPL 代码，**整个固件在分发时受 GPL v2 约束**。自己玩没影响，
-但如果要公开发布二进制或仓库，需要一并提供源码。
+但如果要公开发布二进制或仓库，需要一并提供源码。而 snes9x 那条又叠加了
+禁止商业用途 —— 两者取交集，实际上这个固件只能非商业地分发。
 
 `main/` 下的代码是本项目自己写的。ROM 文件的版权归各自权利人所有。
