@@ -127,12 +127,14 @@ NES 适配层没有强制申请大块 PSRAM。nofrendo 自身若做大于 16 KiB
 | `Memory.FillRAM` | 32 KiB | 普通 `malloc` | 通常 PSRAM |
 | `IPPU.TileCache` | 512 KiB | 普通 `calloc` | 通常 PSRAM |
 | `IAPU.RAM` | 64 KiB | 普通 `malloc` | 通常 PSRAM |
-| `GFX.ZERO` | 128 KiB | 普通 `malloc` | 通常 PSRAM |
+| `GFX LocalState` | 22,972 B，约 22.4 KiB | 普通 `calloc` | 通常 PSRAM |
 | 最终 ROM 副本 | `rom_size + 66,048 B` | 明确 `SPIRAM` | PSRAM |
 | 立体声音频包 | 1,920 B | 明确 `INTERNAL` | 片内 SRAM |
 
 `SubScreen + ZBuffer + SubZBuffer` 合计 244,736 字节，即 239 KiB（十进制约 245 kB）。
 ROM 多出的 66,048 字节由 64 KiB 映射余量和 512 字节头部余量组成。
+本项目编译 Snes9x 时定义了 `NO_ZERO_LUT`，因此 `gfx.c` 里的 128 KiB `GFX.ZERO`
+不会分配，不能计入本项目的内存模型。
 
 #### SNES 为什么启动时几乎吃满 8 MiB
 
@@ -146,11 +148,11 @@ ROM 多出的 66,048 字节由 64 KiB 映射余量和 512 字节头部余量组�
 当前策略应落入 PSRAM 的大块相加，启动阶段的已知大块合计是：
 
 ```text
-7,740,416 B = 7.38 MiB
+7,632,316 B = 7.28 MiB
 ```
 
 这不是串口实测峰值，也不包括 allocator 元数据、声音环形缓冲和其他小对象；另一方面，
-普通 `malloc` 只有位置偏好而非硬保证，少量对象可能回退内部 SRAM。因此 7.38 MiB 是
+普通 `malloc` 只有位置偏好而非硬保证，少量对象可能回退内部 SRAM。因此 7.28 MiB 是
 当前布局的静态模型值，不应当作实机精确峰值。它仍足以解释为什么 SNES 启动阶段确实
 需要 8 MiB PSRAM，而不只是“启用了但没用”。
 
@@ -159,8 +161,8 @@ ROM 多出的 66,048 字节由 64 KiB 映射余量和 512 字节头部余量组�
 
 | ROM 内容大小 | 已知大块合计 |
 |---:|---:|
-| 512 KiB | 1,973,248 B = 1.88 MiB |
-| 2 MiB | 3,546,112 B = 3.38 MiB |
+| 512 KiB | 1,865,148 B = 1.78 MiB |
+| 2 MiB | 3,438,012 B = 3.28 MiB |
 
 仍应把这两个数字理解为静态模型值，不是精确的运行时总占用。
 
@@ -174,10 +176,18 @@ Super Mario World 的现有对照结果：
 | `GFX.Screen` 挪入片内 SRAM | 43 fps |
 | 内部 `GFX.Screen` + PSRAM 影子异步推屏 + 正确音频产样 | 约 45 fps |
 | WRAM 挪入片内 SRAM、`GFX.Screen` 退回 PSRAM | 42–44 fps，已回退 |
+| 普通分配阈值升至 24 KiB，让 `GFX LocalState` 进入片内 SRAM | 重负载约 42–47 fps，无可辨认提升，已回退 |
 
 这些数据证明当前机器上的片内/片外落点会显著影响性能，也证明“用 WRAM 替换内部
 `GFX.Screen`”没有收益。它们没有证明 VRAM 方案无效：仓库可见历史里没有把 64 KiB
 VRAM 挪入片内 SRAM 的对照实验。
+
+`GFX LocalState` 对照使用同一份 Super Mario World、相同无人操作演示流程。24 KiB
+阈值使 `S9xInitGFX()` 的片内占用增加 23,556 字节（结构本体 22,972 字节，其余为
+对齐、allocator 元数据及同一初始化函数的小额分配），稳定运行时片内空闲由约
+60 KiB 降到 37 KiB，最大连续块只剩约
+13 KiB；重负载模拟耗时仍约 14–21 ms/帧，音频保持 0 丢帧、0 写错。它不改变渲染
+算法和像素输出，因此不影响画质，但实测没有换来性能收益，继续保留在 PSRAM 更合理。
 
 但 `GFX.Screen` 119.5 KiB + VRAM 64 KiB 已超过约 179 KiB 的内部预算，所以 VRAM
 实验大概率必须把 `GFX.Screen` 退回 PSRAM。渲染器会直接读 VRAM 中的 tilemap，并在

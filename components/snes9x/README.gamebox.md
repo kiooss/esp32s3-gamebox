@@ -80,7 +80,7 @@ DSP-1 的调用量小，Mode 7 在 snes9x 里也比多层卷轴 + 大量精灵�
 已经超过约 179 KiB 的内部预算，测试 VRAM 时大概率必须把帧缓冲退回 PSRAM；而且
 512 KiB `IPPU.TileCache` 等热数据仍留在外部，所以不可能靠一次搬迁装下整个工作集。
 
-完整对象表、启动阶段 7.38 MiB 已知大块合计、稳定期估算和 SRAM 名词区分见
+完整对象表、启动阶段 7.28 MiB 已知大块合计、稳定期估算和 SRAM 名词区分见
 [`../../docs/memory.md`](../../docs/memory.md)。
 
 音频不是瓶颈（实测 1.2 ms/帧）。上游 Retro-Go 的 README 把 SNES 标成
