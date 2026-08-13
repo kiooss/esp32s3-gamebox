@@ -442,8 +442,8 @@ esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
     while (1) {
         /* 端口 0 的手柄在 input_init() 里已经接好了，这里只管更新状态。
          * 按位或：两路谁按下都算数。 */
-        input_update(0, input_serial_poll() | input_gamepad_poll() |
-                        input_usb_poll());
+        input_update(0, (uint8_t)(input_serial_poll() | input_gamepad_poll() |
+                                 input_usb_poll()));
         nes_emulate(true);
     }
 

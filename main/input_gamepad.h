@@ -17,7 +17,7 @@
  *       下排:  G  B  D  F  3  Y
  *
  * 底边 Arduino 排母的丝印被排母本体挡住，肉眼数针位容易错一位，别用。
- * 黄色排针是公针，DevKitC 也是公针 —— 用**母对母**杜邦线，一共 8 根：
+ * 黄色排针是公针，DevKitC 也是公针 —— 用**母对母**杜邦线，一共 10 根：
  *
  *   黄排针  ESP32-S3   说明
  *   ------  ---------  --------------------------------
@@ -25,33 +25,35 @@
  *   3       3V3        摇杆电位器的供电（不是 V！V 是 5V 档）
  *   X       GPIO1      摇杆 X（= Arduino A0），ADC1_CH0
  *   Y       GPIO2      摇杆 Y（= Arduino A1），ADC1_CH1
- *   A       GPIO15     大按键 A -> NES A（跳）
- *   B       GPIO16     大按键 B -> NES B（跑）
- *   C       GPIO17     大按键 C -> SELECT
- *   D       GPIO18     大按键 D -> START
+ *   A       GPIO15     上方大按键 -> SNES X
+ *   B       GPIO16     右方大按键 -> SNES A
+ *   C       GPIO17     下方大按键 -> SNES B
+ *   D       GPIO18     左方大按键 -> SNES Y
+ *   F       GPIO8      左侧小按键 -> SELECT
+ *   E       GPIO7      右侧小按键 -> START
  *
- * V、E、F、K 四针空着（E/F 是两个小键，K 是摇杆按下，以后做存档/复位用）。
+ * V、K 两针空着（K 是摇杆按下）。
  *
  * 插之前先确认丝印的左右方向：排针本体会挡住正下方一截丝印，而 X/V 在同一端、
  * Y/G 在另一端，认反就是把 3V3 和 GND 接到摇杆信号上。万用表通断档、黑笔搭
  * ESP32 的 GND 去戳你认定的 G 针，响了就对（板上 GND 是大片铜）。不用上电。
  *
  * 选脚理由：
- *   - X/Y 必须落在 GPIO1~10 —— 那是 ESP32-S3 的 ADC1 通道范围。9~14 被屏占了，
- *     只剩 1/2/6/7/8，取头两个。（不用 ADC2：它跟 WiFi 冲突，虽然本项目不开
- *     WiFi，但没必要给以后埋雷。）
- *   - 15/16/17/18 在 DevKitC-1 上是连续四个脚，接线顺手。
+ *   - X/Y 必须落在 GPIO1~10 —— 那是 ESP32-S3 的 ADC1 通道范围。取 GPIO1/2。
+ *     （不用 ADC2：它跟 WiFi 冲突，虽然本项目不开 WiFi，但没必要给以后埋雷。）
+ *   - 15/16/17/18 在 DevKitC-1 上是连续四个脚，接四个大按键；
+ *     7/8 是剩余且无冲突的普通 GPIO，接 F/E 两个小键。
  *   - 全部避开了 Octal PSRAM 的 33~37、原生 USB 的 19/20、strapping 的 0/3/45/46。
  *
  * 5110 排针和 nRF24 排针（黄色那排）用不上，空着。
- * E、F、K 三个键也空着，以后做存档/读档/复位正好。
+ * K 键仍空着，以后做复位或菜单键。
  */
 #pragma once
 
 #include <stdint.h>
 
-/* 两种宿主输入都返回这套公共位。数值故意与 NES_PAD_* 一致，所以 NES 路径
- * 可以零转换直传；GB/GBC 适配层再显式映射到 gnuboy 的不同位序。 */
+/* 宿主输入的公共位。低 8 位故意与 NES_PAD_* 一致，NES/GB/GBC
+ * 只取这部分；高位补上 SNES 才有的 X/Y，避免为了 SNES 破坏旧输入语义。 */
 enum {
     GAMEPAD_BIT_A      = 0x01,
     GAMEPAD_BIT_B      = 0x02,
@@ -61,14 +63,18 @@ enum {
     GAMEPAD_BIT_DOWN   = 0x20,
     GAMEPAD_BIT_LEFT   = 0x40,
     GAMEPAD_BIT_RIGHT  = 0x80,
+    GAMEPAD_BIT_X      = 0x100,
+    GAMEPAD_BIT_Y      = 0x200,
 };
 #include <stdbool.h>
 
 /* ============ 接线（改这里就能换脚） ============ */
-#define PAD_PIN_A       15      /* Shield D2，大按键 A -> NES A */
-#define PAD_PIN_B       16      /* Shield D3，大按键 B -> NES B */
-#define PAD_PIN_SELECT  17      /* Shield D4，大按键 C */
-#define PAD_PIN_START   18      /* Shield D5，大按键 D */
+#define PAD_PIN_SHIELD_A 15     /* 上 -> SNES X */
+#define PAD_PIN_SHIELD_B 16     /* 右 -> SNES A */
+#define PAD_PIN_SHIELD_C 17     /* 下 -> SNES B */
+#define PAD_PIN_SHIELD_D 18     /* 左 -> SNES Y */
+#define PAD_PIN_SELECT   8      /* Shield F，左侧小按键；实物接线确认 */
+#define PAD_PIN_START    7      /* Shield E，右侧小按键；实物接线确认 */
 
 /* 摇杆两轴。必须是 ADC1 的通道，也就是 GPIO1~10。 */
 #define PAD_PIN_X       1
@@ -89,7 +95,8 @@ enum {
 
 /* ============ 摇杆可视化 ============
  *
- * 开机时把摇杆位置实时画到屏上，按大按键 A 退出，然后照常进选单。
+ * 开机时把摇杆位置和六个按键状态实时画到屏上，同时按
+ * SNES A+B（Shield B+C，右+下）退出，然后照常进选单。
  * 默认开着 —— 它同时也是开机自检，一眼就能确认手柄接好了没有。
  * 嫌开机多一步就改成 0。
  *
@@ -109,8 +116,9 @@ void input_gamepad_init(void);
 
 /* 每帧调一次，返回 NES 手柄位掩码（NES_PAD_* 的组合）。
  * 没调 init()、或者两路都没起来时恒返回 0，可以安全地和别的输入源按位或。 */
-uint8_t input_gamepad_poll(void);
+uint16_t input_gamepad_poll(void);
 
-/* 摇杆位置可视化，按大按键 A 退出。需要 display_init() 已经跑过。
+/* 摇杆/按键可视化，同时按 SNES A+B（Shield B+C）退出。
+ * 需要 display_init() 已经跑过。
  * PAD_DIAG_SCREEN=1 时 input_gamepad_init() 末尾会自动调它。 */
 void input_gamepad_show(void);

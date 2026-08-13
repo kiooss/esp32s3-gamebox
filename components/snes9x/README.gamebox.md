@@ -16,8 +16,9 @@
   数量级（`cpuops.c` 73 KB、`dsp.c` 141 KB、`gfx.c` 101 KB），`-O3` 的循环
   展开会把 `.text` 撑出 1 MB 的 app 分区。
 
-宿主的显示 / 输入 / 音频 / 内存布局全部在 `main/snes_emu.c`，上游更新可以
-直接覆盖 `src/`。
+宿主的显示 / 输入 / 音频 / 内存布局在 `main/snes_emu.c`，SMW 即时存档的 FAT、
+双槽和 CRC 外壳在 `main/snes_save.c`；两者都只调用核心现成接口，上游仍可直接覆盖
+`src/`。
 
 ## ⚠ 授权和 nofrendo/gnuboy 不同
 
@@ -83,5 +84,14 @@ DSP-1 的调用量小，Mode 7 在 snes9x 里也比多层卷轴 + 大量精灵�
 完整对象表、启动阶段 7.28 MiB 已知大块合计、稳定期估算和 SRAM 名词区分见
 [`../../docs/memory.md`](../../docs/memory.md)。
 
-音频不是瓶颈（实测 1.2 ms/帧）。上游 Retro-Go 的 README 把 SNES 标成
-"(slow)"、`main_snes.c` 把跳帧初值写死为 3，都和这里的实测一致。
+音频不是最大瓶颈，但实测混音和提交约 1.2~1.5 ms/帧；SMW 本来就常常超过
+16.7 ms 帧预算，进游戏前关闭声音会直接释放约 7%~9% 的核 0 时间，主观和实际都
+可能更流畅。上游 Retro-Go 的 README 把 SNES 标成 "(slow)"、`main_snes.c` 把
+跳帧初值写死为 3，都和这里的实测一致。
+
+## SMW 即时存档
+
+仅 ROM 内部名为 `SUPER MARIOWORLD` 的卡带启用：同时长按 SELECT + START 1 秒保存，
+下次启动同一 ROM 自动恢复。单份快照 365,120 字节；Flash 尾部 960 KiB 的 FAT 分区
+套 wear levelling，并用 A/B 双槽、ROM CRC、状态 CRC 和序号保证中途断电仍能回退。
+功能只包装本核心已有的 `S9xSaveState` / `S9xLoadState`，没有修改 `src/`。

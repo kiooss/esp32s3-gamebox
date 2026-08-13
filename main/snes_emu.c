@@ -10,8 +10,9 @@
  *  1. **渲染缓冲在内部 SRAM，推屏走 PSRAM 影子缓冲**。不是标准的乒乓 ——
  *     一块 119 KB，内部 SRAM 腾不出第二块。理由见 s_framebuf/s_present 处。
  *
- *  2. **无存档、无按键重映射、无菜单**。手柄只有 8 个键，SNES 要 12 个，
- *     X/Y/L/R 暂时映射不到实体键（见 map_pad）。
+ *  2. **仅 SMW 有即时存档，L/R 暂无实体键**。Shield 四个大键已按
+ *     物理方位映射完整 SNES ABXY，F/E 小键对应 SELECT/START。SMW 用两小键长按保存，
+ *     实现在宿主 snes_save.c，不改 Snes9x 核心。
  *
  *  3. **跳帧默认为 3**（画 1 帧跳 3 帧）。这不是保守估计，是上游 retro-go
  *     给 SNES 写死的初值（main_snes.c: `app->frameskip = 3;`），
@@ -30,6 +31,8 @@
 #include "input_usb.h"
 #include "nes_emu.h"
 #include "rgb_led.h"
+#include "snes_save.h"
+#include "esp_crc.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -69,6 +72,11 @@ _Static_assert(DISP_FB_H == SNES_HEIGHT,
 /* 1 = 模拟照跑但完全不推屏，用来单独量 CPU+PPU 的耗时（对照 nes_emu.c 的 DIAG_TIMING）。 */
 #define SNES_DIAG_NO_BLIT  0
 
+/* SMW 的即时存档组合键。两键从按下那一帧起就不传给游戏，持续 1 秒才写盘，
+ * 避免正常按 START 暂停时误存；松开以后才能再触发下一次。 */
+#define SAVE_COMBO_BITS    (GAMEPAD_BIT_SELECT | GAMEPAD_BIT_START)
+#define SAVE_HOLD_US       1000000
+
 /* 内部 SRAM 只腾得出约 179 KB（NES 那 128 KB 还回来之后），而想放进去的有：
  * 帧缓冲 119 KB、WRAM 128 KB、VRAM 64 KB —— 任意两个都放不下。
  * 这个开关用来实测哪一个进内部 SRAM 收益最大：
@@ -94,6 +102,7 @@ static uint16_t *s_present;     /* 推屏源，PSRAM */
 static int16_t  *s_soundbuf;
 static bool      s_audio_ok;
 static int       s_audio_frames; /* 每帧提交多少立体声帧，由卡带帧率决定 */
+static uint16_t  s_pad_state;    /* 每帧只轮询一次，核心回调读取这份快照 */
 
 /* 条带回调 —— 跑在核 1 上。做两件事：横向 9:8 扩展，以及小端转大端。
  *
@@ -130,6 +139,30 @@ static void snes_strip(uint16_t *strip, int y0, int h, void *ctx)
     }
 }
 
+typedef struct {
+    const char *text;
+    uint16_t color;
+} save_notice_t;
+
+/* 保存时冻结当前画面并盖一条提示。display 的绘图原语会自己裁到当前条带，
+ * 所以和其他条带回调一样，每条都执行同一份整屏坐标绘制列表。 */
+static void save_notice_strip(uint16_t *strip, int y0, int h, void *ctx)
+{
+    const save_notice_t *notice = ctx;
+    snes_strip(strip, y0, h, s_present);
+
+    int text_w = (int)strlen(notice->text) * 6;
+    int x = (DISP_FB_W - text_w) / 2;
+    display_fill_rect(x - 8, 99, text_w + 16, 24, C_BLACK);
+    display_text(x, 107, notice->text, notice->color, 1);
+}
+
+static void show_save_notice(const char *text, uint16_t color)
+{
+    save_notice_t notice = { .text = text, .color = color };
+    display_stream_sync(save_notice_strip, &notice);
+}
+
 static void black_strip(uint16_t *strip, int y0, int h, void *ctx)
 {
     display_clear(C_BLACK);
@@ -159,18 +192,18 @@ void S9xDeinitDisplay(void)
 {
 }
 
-/* 手柄 8 键 -> SNES 12 键。X/Y/L/R 暂时无实体键可映射：
- * 验证阶段不做组合键，SMW 只用到 B(跳) / Y(跑) / 方向 / START。
- * 所以把 Y 也挂在 B 键上（跑步键长按），A 键给 SNES 的 B。 */
-static uint32_t map_pad(uint8_t state)
+/* Shield 的四个大键按方位完整映射 SNES ABXY；L/R 仍无实体键。 */
+static uint32_t map_pad(uint16_t state)
 {
     uint32_t pad = 0;
     if (state & GAMEPAD_BIT_RIGHT)  pad |= SNES_RIGHT_MASK;
     if (state & GAMEPAD_BIT_LEFT)   pad |= SNES_LEFT_MASK;
     if (state & GAMEPAD_BIT_UP)     pad |= SNES_UP_MASK;
     if (state & GAMEPAD_BIT_DOWN)   pad |= SNES_DOWN_MASK;
-    if (state & GAMEPAD_BIT_A)      pad |= SNES_B_MASK;   /* 跳 */
-    if (state & GAMEPAD_BIT_B)      pad |= SNES_Y_MASK;   /* 跑 / 吐火 */
+    if (state & GAMEPAD_BIT_A)      pad |= SNES_A_MASK;
+    if (state & GAMEPAD_BIT_B)      pad |= SNES_B_MASK;
+    if (state & GAMEPAD_BIT_X)      pad |= SNES_X_MASK;
+    if (state & GAMEPAD_BIT_Y)      pad |= SNES_Y_MASK;
     if (state & GAMEPAD_BIT_SELECT) pad |= SNES_SELECT_MASK;
     if (state & GAMEPAD_BIT_START)  pad |= SNES_START_MASK;
     return pad;
@@ -179,7 +212,7 @@ static uint32_t map_pad(uint8_t state)
 uint32_t S9xReadJoypad(int32_t port)
 {
     if (port != 0) return 0;
-    return map_pad(input_serial_poll() | input_gamepad_poll() | input_usb_poll());
+    return map_pad(s_pad_state);
 }
 
 bool S9xReadMousePosition(int32_t which1, int32_t *x, int32_t *y, uint32_t *buttons)
@@ -286,6 +319,8 @@ esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
 {
     if (!rom || rom_size < 1024) return ESP_ERR_INVALID_ARG;
 
+    uint32_t rom_crc = esp_crc32_le(0, rom, rom_size);
+
     printf("\nROM: %s  (%u 字节，SNES)\n", name ? name : "(unknown)",
            (unsigned)rom_size);
     display_stream_sync(black_strip, NULL);
@@ -343,6 +378,14 @@ esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
 
     S9xSetPlaybackRate(Settings.SoundPlaybackRate);
 
+    /* 目前只给 SMW 开即时存档。名称负责限制功能范围，ROM CRC 负责保证同名改版
+     * 或不同区域版本不会误加载；分区挂载失败不影响模拟器本身。 */
+    bool save_enabled = strcmp(Memory.ROMName, "SUPER MARIOWORLD") == 0;
+    bool resumed = false;
+    if (save_enabled && snes_save_init(rom_crc) == ESP_OK) {
+        resumed = snes_save_load_latest(rom_crc);
+    }
+
     esp_err_t rgb_err = rgb_led_start_rainbow();
     if (rgb_err != ESP_OK) {
         ESP_LOGW(TAG, "板载 RGB 彩虹效果未启动：%s", esp_err_to_name(rgb_err));
@@ -361,6 +404,10 @@ esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
            (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
     printf("开始模拟，跳帧 %d（画 1 帧跳 %d 帧）。\n\n",
            SNES_FRAMESKIP, SNES_FRAMESKIP);
+    if (save_enabled) {
+        printf("SMW 即时存档：同时长按 SELECT + START 1 秒保存；下次启动自动恢复。%s\n\n",
+               resumed ? "本次已恢复上次状态。" : "目前没有可恢复状态。");
+    }
 
     const int fps = Memory.ROMFramesPerSecond ?: 60;
     const int frame_period_us = 1000000 / fps;
@@ -378,8 +425,39 @@ esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
     int64_t audio_us     = 0;
     int64_t stat_t0      = esp_timer_get_time();
     int64_t next_frame   = stat_t0;
+    int64_t save_hold_t0 = 0;
+    bool save_latched    = false;
 
     while (1) {
+        s_pad_state = input_serial_poll() | input_gamepad_poll() | input_usb_poll();
+
+        bool save_combo = save_enabled &&
+                          (s_pad_state & SAVE_COMBO_BITS) == SAVE_COMBO_BITS;
+        if (save_combo) {
+            /* 组合键属于系统，不让 SMW 同时收到 SELECT/START。 */
+            s_pad_state &= ~SAVE_COMBO_BITS;
+            int64_t now = esp_timer_get_time();
+            if (save_hold_t0 == 0) save_hold_t0 = now;
+
+            if (!save_latched && now - save_hold_t0 >= SAVE_HOLD_US) {
+                save_latched = true;
+                show_save_notice("SAVING...", C_YELLOW);
+                bool ok = snes_save_write(rom_crc);
+                show_save_notice(ok ? "SAVE OK" : "SAVE FAILED",
+                                 ok ? C_GREEN : C_RED);
+                vTaskDelay(pdMS_TO_TICKS(700));
+
+                /* 写 Flash 的停顿不算模拟性能，也不能让配速器误追赶几百帧。 */
+                next_frame = stat_t0 = esp_timer_get_time();
+                emu_frames = drawn_frames = 0;
+                emu_us = blit_us = audio_us = 0;
+                continue;
+            }
+        } else {
+            save_hold_t0 = 0;
+            save_latched = false;
+        }
+
         bool draw_frame = (skip_frames == 0);
 
         /* 换渲染目标必须在 S9xMainLoop 之前 —— S9xStartScreenRefresh 会拿

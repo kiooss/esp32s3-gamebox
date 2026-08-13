@@ -20,13 +20,15 @@ ESP32-S3-DevKitC-1 兼容板（N16R8）+ ST7789 SPI 屏（240×320，横屏 320�
 - [x] **《超级马里奥兄弟》标题画面正常运行**，颜色已校准
 - [x] 移植 GB/GBC 模拟器核心（gnuboy）并接入同一套菜单、手柄、显示和音频
 - [x] 串口键盘当手柄（临时方案）→ `main/input_serial.c`
-- [x] JoyStick Shield 手柄 → `main/input_gamepad.c`（摇杆 + 四个按键，实测正常）
+- [x] JoyStick Shield 手柄 → `main/input_gamepad.c`（摇杆 + 四个面键 + SELECT/START）
 - [x] USB HID 手柄 → `main/input_usb.c`（通用描述符解析，优先支持 Raspberry Pi/RetroPie 复古手柄）
 - [x] MAX98357 I2S 游戏音频
 - [~] 移植 SNES 模拟器核心（snes9x 2005）→ `components/snes9x/`。能跑但**达不到
       可玩帧率**：SMW 45/60 fps、Mario Kart 50/60 fps，大量热数据和渲染中间结果
       塞不进约 179 KB 的可用内部 SRAM。另外 Super FX / SA-1 / S-DD1 没有实现，
       这类卡带会黑屏。详见 [`components/snes9x/README.gamebox.md`](components/snes9x/README.gamebox.md)
+- [x] SMW 即时存档：SELECT + START 长按 1 秒，RST 后启动同一 ROM 自动恢复；
+      960 KiB FAT + wear levelling，双槽交替写和 CRC 防断电损坏
 - [x] ROM 分区扩到 14 MB（35 款游戏，镜像 10.35 MB）
 
 ROM 说明：商业 NES/GB/GBC/SNES ROM 都是版权物，**本仓库不包含**，需由使用者自备。
@@ -144,8 +146,8 @@ malloc 一块内部缓冲再 memcpy —— 数据最后照样落在内部 RAM，
 `build/roms.bin`，再用 `idf.py flash-roms` 单独烧入。开机菜单会显示 `NES/GB/GBC`
 类型；换游戏仍按板子 RST 重启，避免在不同模拟器之间留下运行时状态。
 
-选单里按大按键 B 可切换声音开关，标题右侧会显示当前状态。设置写入 NVS，
-所以按 RST 换游戏或重新上电后仍会保持；进入游戏后 B 恢复为原本的跑/发射键。
+选单里按下方面键（SNES B / Shield C）可切换声音开关，标题右侧会
+显示当前状态。设置写入 NVS，所以按 RST 换游戏或重新上电后仍会保持。
 
 `main/roms/` 只用于 ROM 分区不可用时的 NES 编译期回退。只有要更换这个回退游戏时，
 才需要同步修改 `main/CMakeLists.txt` 的 `EMBED_FILES` 和 `main/nes_emu.c` 的
@@ -156,13 +158,20 @@ malloc 一块内部缓冲再 memcpy —— 数据最后照样落在内部 RAM，
 JoyStick Shield，接线见「接线」一节。飞线手柄、USB 手柄、串口键盘三路输入
 **并存**（按位或），串口留着当调试后路。
 
-| 手柄 | 作用 |
-|---|---|
-| 大按键 A | A（跳） |
-| 大按键 B | 选单：声音开关；游戏：B（跑 / 发射） |
-| 大按键 C | SELECT |
-| 大按键 D | START |
-| 摇杆 | 上下左右（模拟量，带死区 + 迟滞） |
+| 物理位置 | Shield 丝印 | SNES | NES / GB / GBC |
+|---|---|---|---|
+| 上方大键 | A | X | 无 |
+| 左方大键 | D | Y | 无 |
+| 右方大键 | B | A | A |
+| 下方大键 | C | B | B（选单中切换声音） |
+| 左侧小键 | F | SELECT | SELECT |
+| 右侧小键 | E | START | START |
+| 摇杆 | — | 上下左右 | 上下左右 |
+
+SNES 的 Super Mario World 里，同时长按小按键 F（SELECT）和 E（START）1 秒会冻结
+画面并显示 `SAVING...`，看到 `SAVE OK` 后即可安全按 RST。下次重新选择同一份 SMW ROM
+会自动回到保存瞬间。存档与 ROM CRC 绑定，不会加载到同名改版或其他区域版本；目前
+只有 SMW 启用此功能，其他游戏不会占用这份全局即时存档。
 
 上电时**手别碰摇杆**：开机要采 16 次静止读数做中位校准，碰着会被判定为
 「没接好」而整路禁用（按键不受影响）。
@@ -276,20 +285,25 @@ Arduino UNO 的扩展板，**插不到 DevKitC 上**，只能飞线。走板子�
 | 3 | **3V3** | ⚠️ 不是 `V`，`V` 是 5V |
 | X | GPIO1 | 摇杆 X（ADC1_CH0） |
 | Y | GPIO2 | 摇杆 Y（ADC1_CH1） |
-| A | GPIO15 | 大按键 A → NES A（跳） |
-| B | GPIO16 | 大按键 B → NES B（跑） |
-| C | GPIO17 | 大按键 C → SELECT |
-| D | GPIO18 | 大按键 D → START |
+| A | GPIO15 | 上方大键 → SNES X |
+| B | GPIO16 | 右方大键 → SNES A |
+| C | GPIO17 | 下方大键 → SNES B |
+| D | GPIO18 | 左方大键 → SNES Y |
+| F | GPIO8 | 左侧小键 → SELECT |
+| E | GPIO7 | 右侧小键 → START |
 
-`V`、`E`、`F`、`K` 空着（E/F 是两个小键，K 是摇杆按下，留给存档/复位）。
+`V`、`K` 空着（K 是摇杆按下）。
 
 ⚠️ **板子左边的 3V3/5V 拨动开关必须拨到 3V3**。摇杆是两个电位器跨在 VCC 和
 GND 之间，拨 5V 档输出就是 5V，而 ESP32-S3 的 GPIO 不是 5V 耐受的。
 
-摇杆两轴必须落在 GPIO1~10（ADC1 的范围），9~14 已被屏占用，实际只剩 1/2/6/7/8。
+摇杆两轴必须落在 GPIO1~10（ADC1 的范围），当前用 GPIO1/2；GPIO7/8
+已分给 F/E 小键。
 改引脚改 `main/input_gamepad.h` 顶部的 `PAD_PIN_*`。
 
-开机会先进摇杆自检画面（把摇杆位置画到屏上），按大按键 A 继续进选单。
+开机会先进摇杆自检画面：除了摇杆光点和 ADC 数值，下方还会显示
+`X/Y/A/B/SELECT/START`，按下时变绿。同时按 SNES A+B（Shield B+C，右+下）
+继续进选单。
 不想要就把 `main/input_gamepad.h` 的 `PAD_DIAG_SCREEN` 改成 0。
 
 **接线时断电**，插好再上电。

@@ -64,13 +64,16 @@ static bool s_btn_ok;
 static bool s_axes_ok;
 
 static uint8_t s_dir;           /* 方向位的当前状态，迟滞要用 */
-static uint8_t s_last_state;    /* 只在变化时打日志 */
+static uint16_t s_last_state;   /* 只在变化时打日志 */
 
-static const struct { int pin; uint8_t mask; const char *name; } BUTTONS[] = {
-    { PAD_PIN_A,      NES_PAD_A,      "A"      },
-    { PAD_PIN_B,      NES_PAD_B,      "B"      },
-    { PAD_PIN_SELECT, NES_PAD_SELECT, "SELECT" },
-    { PAD_PIN_START,  NES_PAD_START,  "START"  },
+static const struct { int pin; uint16_t mask; const char *name; } BUTTONS[] = {
+    /* Shield 上的字母是硬件丝印；这里按物理方位排成 SNES 菱形。 */
+    { PAD_PIN_SHIELD_A, GAMEPAD_BIT_X,      "X"      },
+    { PAD_PIN_SHIELD_B, GAMEPAD_BIT_A,      "A"      },
+    { PAD_PIN_SHIELD_C, GAMEPAD_BIT_B,      "B"      },
+    { PAD_PIN_SHIELD_D, GAMEPAD_BIT_Y,      "Y"      },
+    { PAD_PIN_SELECT,   GAMEPAD_BIT_SELECT, "SELECT" },
+    { PAD_PIN_START,    GAMEPAD_BIT_START,  "START"  },
 };
 #define BUTTON_COUNT  (sizeof(BUTTONS) / sizeof(BUTTONS[0]))
 
@@ -190,7 +193,14 @@ typedef struct {
     int     px, py;                 /* 光点位置 */
     int     rx, ry, ex, ey;         /* 原始读数 / 去中位后的偏移 */
     uint8_t d;                      /* 折算出的方向键位 */
+    uint16_t keys;                  /* 面键 + SELECT/START */
 } viz_t;
+
+static int draw_key_status(int x, int y, const char *name, bool pressed)
+{
+    display_text(x, y, name, pressed ? C_GREEN : C_GRAY, 1);
+    return x + (int)strlen(name) * 6 + 8;
+}
 
 /* 整份绘制列表会被逐条带调用 BAND_COUNT 次，落在条带外的行由绘图原语自己裁。 */
 static void viz_strip(uint16_t *strip, int y0, int h, void *ctx)
@@ -208,10 +218,39 @@ static void viz_strip(uint16_t *strip, int y0, int h, void *ctx)
     display_text(4, v->by + v->box + 3, line, C_WHITE, 1);
     snprintf(line, sizeof(line), "off %+5d %+5d", v->ex, v->ey);
     display_text(4, v->by + v->box + 12, line, C_GRAY, 1);
-    snprintf(line, sizeof(line), "%c%c%c%c  A exit",
+    snprintf(line, sizeof(line), "DIR %c%c%c%c",
              (v->d & NES_PAD_UP)   ? 'U' : '-', (v->d & NES_PAD_DOWN)  ? 'D' : '-',
              (v->d & NES_PAD_LEFT) ? 'L' : '-', (v->d & NES_PAD_RIGHT) ? 'R' : '-');
-    display_text(4, v->by + v->box + 23, line, C_YELLOW, 2);
+    display_text(4, v->by + v->box + 23, line, C_YELLOW, 1);
+
+    int x = 4;
+    int y = v->by + v->box + 35;
+    x = draw_key_status(x, y, "X(A)", v->keys & GAMEPAD_BIT_X);
+    x = draw_key_status(x, y, "Y(D)", v->keys & GAMEPAD_BIT_Y);
+    x = draw_key_status(x, y, "A(B)", v->keys & GAMEPAD_BIT_A);
+    draw_key_status(x, y, "B(C)", v->keys & GAMEPAD_BIT_B);
+
+    x = 4;
+    y += 14;
+    x = draw_key_status(x, y, "SEL(F)", v->keys & GAMEPAD_BIT_SELECT);
+    x = draw_key_status(x, y, "START(E)", v->keys & GAMEPAD_BIT_START);
+    display_text(x + 4, y, "A+B EXIT", C_YELLOW, 1);
+}
+
+static uint16_t read_buttons(void)
+{
+    if (!s_btn_ok) return 0;
+
+    uint16_t state = 0;
+    for (unsigned i = 0; i < BUTTON_COUNT; i++) {
+        if (gpio_get_level(BUTTONS[i].pin) == 0) state |= BUTTONS[i].mask;
+    }
+    return state;
+}
+
+static uint16_t diag_input(void)
+{
+    return read_buttons() | input_usb_poll() | input_serial_poll();
 }
 
 void input_gamepad_show(void)
@@ -221,23 +260,26 @@ void input_gamepad_show(void)
         return;
     }
 
-    /* 画布是 DISP_FB_W x DISP_FB_H = 288x224：
-     * 方框 0~149，三行文字 153~190，下面还剩 34 行余量。 */
+    /* 画布是 DISP_FB_W x DISP_FB_H = 288x224：方框 0~149，下方留给
+     * ADC 数值、方向和两行按键状态，最后一行止于 y=207。 */
     const int BOX = 150;
     const int BX  = (DISP_FB_W - BOX) / 2;
     const int BY  = 0;
     const int HC  = BX + BOX / 2, VC = BY + BOX / 2;
     const int R   = BOX / 2;
 
-    /* USB-only 使用时 GPIO15 只会被内部上拉，一直等实体 A 就永远进不了菜单。
-     * USB 与串口在调用本函数前已初始化，因此三路的 A 都允许退出诊断。 */
-    #define DIAG_A_DOWN() (gpio_get_level(PAD_PIN_A) == 0 || \
-                           (input_usb_poll() & GAMEPAD_BIT_A) || \
-                           (input_serial_poll() & GAMEPAD_BIT_A))
-    printf("\n摇杆可视化：点跟着手走就说明映射对了。按任一手柄 A 退出。\n");
-    while (DIAG_A_DOWN()) vTaskDelay(pdMS_TO_TICKS(10));
+    const uint16_t exit_combo = GAMEPAD_BIT_A | GAMEPAD_BIT_B;
+    printf("\n摇杆可视化：点跟着手走就说明映射对了。"
+           "屏下方会高亮按下的键，同时按 SNES A+B 退出。\n");
+    /* 上次退出或上电时若还按着其中一键，先等两键全部松开。 */
+    while (diag_input() & exit_combo) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
 
-    while (!DIAG_A_DOWN()) {
+    while (1) {
+        uint16_t keys = diag_input();
+        if ((keys & exit_combo) == exit_combo) break;
+
         int rx = read_axis(s_ch_x);
         int ry = read_axis(s_ch_y);
 
@@ -260,11 +302,14 @@ void input_gamepad_show(void)
 
         viz_t v = { .bx = BX, .by = BY, .box = BOX, .hc = HC, .vc = VC,
                     .px = px, .py = py, .rx = rx, .ry = ry,
-                    .ex = ex, .ey = ey, .d = d };
+                    .ex = ex, .ey = ey, .d = d, .keys = keys };
         display_stream_sync(viz_strip, &v);     /* v 在栈上，必须等推完 */
     }
-    while (DIAG_A_DOWN()) vTaskDelay(pdMS_TO_TICKS(10));
-    #undef DIAG_A_DOWN
+    /* 必须等 A/B 都松开才返回；否则先松 A 后松 B 时，残留的 B
+     * 会被选单当成新按下，意外切换声音。 */
+    while (diag_input() & exit_combo) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
     printf("退出摇杆可视化\n\n");
 }
 
@@ -292,8 +337,9 @@ void input_gamepad_init(void)
         printf("  方向  摇杆没起来（见上面的警告），十字键请用串口 WASD\n");
     }
     if (s_btn_ok) {
-        printf("  A(跳) 大按键A       B(跑) 大按键B\n");
-        printf("  START 大按键D       SELECT 大按键C\n");
+        printf("  SNES 面键：上X / 左Y / 右A / 下B（Shield A/D/B/C）\n");
+        printf("  SELECT Shield F(GPIO%d)  START Shield E(GPIO%d)\n",
+               PAD_PIN_SELECT, PAD_PIN_START);
     } else {
         printf("  按键没起来（见上面的警告），请用串口 K/J/回车/Tab\n");
     }
@@ -304,17 +350,9 @@ void input_gamepad_init(void)
 #endif
 }
 
-uint8_t input_gamepad_poll(void)
+uint16_t input_gamepad_poll(void)
 {
-    uint8_t state = 0;
-
-    if (s_btn_ok) {
-        for (unsigned i = 0; i < BUTTON_COUNT; i++) {
-            if (gpio_get_level(BUTTONS[i].pin) == 0) {   /* 按下 = 低 */
-                state |= BUTTONS[i].mask;
-            }
-        }
-    }
+    uint16_t state = read_buttons();
 
     if (s_axes_ok) {
         int vx = read_axis(s_ch_x);
@@ -334,13 +372,15 @@ uint8_t input_gamepad_poll(void)
     }
 
     if (state != s_last_state) {
-        ESP_LOGI(TAG, "%c%c%c%c %s %s %s %s",
+        ESP_LOGI(TAG, "%c%c%c%c %s %s %s %s %s %s",
                  (state & NES_PAD_UP)     ? 'U' : '-',
                  (state & NES_PAD_DOWN)   ? 'D' : '-',
                  (state & NES_PAD_LEFT)   ? 'L' : '-',
                  (state & NES_PAD_RIGHT)  ? 'R' : '-',
                  (state & NES_PAD_A)      ? "A" : "-",
                  (state & NES_PAD_B)      ? "B" : "-",
+                 (state & GAMEPAD_BIT_X)  ? "X" : "-",
+                 (state & GAMEPAD_BIT_Y)  ? "Y" : "-",
                  (state & NES_PAD_SELECT) ? "SEL" : "---",
                  (state & NES_PAD_START)  ? "STA" : "---");
         s_last_state = state;

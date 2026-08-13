@@ -20,10 +20,11 @@
 # 分区容量，所以开大分区不增加烧录时间，尾部空着反而是浪费。
 # offset 没变，顶层 CMakeLists.txt 的 ROMS_OFFSET 不用跟着改。
 #
-# 用到 15.06 MB（止于 0xF10000），剩 960 KB。之前那 6.9 MB 余量就是被这次吃掉的，
-# 以后想加存档分区或第二个 app 分区，得从 roms 里让出来。
+# roms 止于 0xF10000；尾部 960 KB 全部给 SMW 即时存档。FAT 让 Snes9x 现成的
+# stdio 快照接口可以直接使用，wear levelling 避免每次都擦写同一组物理扇区。
 # Name,     Type, SubType, Offset,   Size
 nvs,        data, nvs,     0x9000,   0x6000
 phy_init,   data, phy,     0xf000,   0x1000
 factory,    app,  factory, 0x10000,  0x100000
 roms,       data, 0x40,    0x110000, 0xE00000
+snes_save,  data, fat,     0xF10000, 0x0F0000

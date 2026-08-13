@@ -67,14 +67,20 @@ Flash 和 PSRAM 是两套独立资源。ROM 分区的 mmap 只消耗 Flash 地�
 |---|---:|---:|---|
 | NVS | `0x009000` | 24 KiB | 声音开关等持久配置 |
 | PHY init | `0x00F000` | 4 KiB | ESP-IDF PHY 数据 |
-| factory app | `0x010000` | 1 MiB | 固件；当前参考构建为 919,312 字节 |
+| factory app | `0x010000` | 1 MiB | 固件；六键 + 即时存档参考构建约 968 KiB，余约 79 KiB |
 | roms | `0x110000` | 14 MiB | 当前参考镜像 10,848,792 字节（约 10.35 MiB） |
+| snes_save | `0xF10000` | 960 KiB | SMW 即时存档，FAT + wear levelling |
 
-`roms` 分区止于 `0xF10000`，到 16 MiB Flash 末尾还有 960 KiB 未分区。ROM 镜像只在
-加、删或替换游戏时用 `idf.py flash-roms` 单独烧录，普通 `idf.py flash` 不更新它。
+`roms` 分区止于 `0xF10000`，其后的 960 KiB 已全部分给 `snes_save`。ROM 镜像只在
+加、删或替换游戏时用 `idf.py flash-roms` 单独烧录，普通 `idf.py flash` 不更新它；
+普通烧固件会更新分区表，但不会主动擦除已有的存档分区。
 
 NES 和 GB/GBC 可以直接使用 mmap 的只读 ROM 指针。SNES 是例外：Snes9x 的装载流程会
 就地移动 512 字节头并改写映射区域，所以适配层必须把所选 ROM 复制到 PSRAM。
+
+SMW 单份未压缩即时状态固定为 365,120 字节（356.6 KiB）。存档层使用两个交替文件：
+写新槽期间保留上一槽，完整关闭文件、重新读取并校验 CRC 后才提交元数据。RST 或断电
+发生在保存中途时，下次会回退到上一份；ROM CRC 和格式版本不匹配时拒绝加载。
 
 ## 4. 公共显示内存
 

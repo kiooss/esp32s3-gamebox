@@ -1,7 +1,7 @@
 # 注意：一旦给 main 显式写了 REQUIRES，它就不再自动依赖全部组件了，
 # 所以 display.c / nes_emu.c 用到的驱动都得在这里列全。
 idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
-                            "gbc_emu.c" "snes_emu.c"
+                            "gbc_emu.c" "snes_emu.c" "snes_save.c"
                             "rgb_led.c" "audio_output.c"
                             "input_serial.c" "input_gamepad.c" "input_usb.c"
                             "rom_store.c" "rom_menu.c"
@@ -19,7 +19,9 @@ idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
                                 espressif__led_strip  # 板载可寻址 RGB LED
                                 esp_adc         # 摇杆走 ADC1
                                 esp_timer
+                                esp_hw_support # ROM CRC 与存档文件 CRC
                                 nvs_flash      # 记住菜单里的声音开关
+                                fatfs          # SMW 即时存档，底层自动带 wear levelling
                                 spi_flash      # 提供 esp_flash.h
                        # 这里登记的 ROM 只是「可选」，不是全都进固件 —— 没被
                        # nes_emu.c 的 ROM_CHOICE 选中的那几个没有 extern 引用，

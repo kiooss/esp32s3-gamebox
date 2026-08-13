@@ -141,7 +141,8 @@ idf.py flash-roms                                          # 只在加/删 roms/
 
 选脚时永久避开：GPIO33~37（Octal PSRAM）、19/20（原生 USB）、0/3/45/46（strapping）。
 屏的 SCK/MOSI/CS 必须是 SPI2 的 IOMUX 原生脚（12/11/10），换脚会降到 40 MHz。
-摇杆两轴必须在 ADC1 范围（GPIO1~10），屏占了 9~14，实际只剩 1/2/6/7/8。
+摇杆两轴必须在 ADC1 范围（GPIO1~10），当前用 GPIO1/2；GPIO7/8
+已给 Shield E/F 小键用 GPIO7/8 做 START/SELECT。
 
 ## 更多文档
 

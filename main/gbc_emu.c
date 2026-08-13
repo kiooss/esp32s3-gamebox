@@ -94,7 +94,7 @@ static void audio_callback(void *buffer, size_t length)
     audio_output_submit_stereo(buffer, length / 2);
 }
 
-static int map_pad(uint8_t state)
+static int map_pad(uint16_t state)
 {
     int pad = 0;
     if (state & GAMEPAD_BIT_RIGHT)  pad |= GB_PAD_RIGHT;
