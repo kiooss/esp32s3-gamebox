@@ -147,4 +147,5 @@ idf.py flash-roms                                          # 只在加/删 roms/
 
 - `README.md` —— 路线图、接线表、操作说明、调色板选择、排障记录
 - `docs/hardware.md` —— 板卡细节、引脚、ST7789 三个坑、逐次优化的实测数据（§7）
+- `docs/memory.md` —— Flash、内部 SRAM、PSRAM 的统一定义和三种模拟器分配账
 - 已知问题：屏没引出 TE 信号，推屏和面板扫描无法同步，画面剧变时有轻微撕裂

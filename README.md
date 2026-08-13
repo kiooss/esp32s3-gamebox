@@ -4,7 +4,8 @@ ESP32-S3-DevKitC-1 兼容板（N16R8）+ ST7789 SPI 屏（240×320，横屏 320�
 
 **目标**：在这块板上运行 NES、Game Boy 和 Game Boy Color 游戏。
 
-硬件详情见 [`docs/hardware.md`](docs/hardware.md)。
+硬件详情见 [`docs/hardware.md`](docs/hardware.md)；Flash、内部 SRAM、PSRAM 和三种
+模拟器的完整分配账见 [`docs/memory.md`](docs/memory.md)。
 
 ## 路线图
 
@@ -23,8 +24,8 @@ ESP32-S3-DevKitC-1 兼容板（N16R8）+ ST7789 SPI 屏（240×320，横屏 320�
 - [x] USB HID 手柄 → `main/input_usb.c`（通用描述符解析，优先支持 Raspberry Pi/RetroPie 复古手柄）
 - [x] MAX98357 I2S 游戏音频
 - [~] 移植 SNES 模拟器核心（snes9x 2005）→ `components/snes9x/`。能跑但**达不到
-      可玩帧率**：SMW 45/60 fps、Mario Kart 50/60 fps，瓶颈是工作集（约 950 KB）
-      塞不进 179 KB 内部 SRAM。另外 Super FX / SA-1 / S-DD1 没有实现，
+      可玩帧率**：SMW 45/60 fps、Mario Kart 50/60 fps，大量热数据和渲染中间结果
+      塞不进约 179 KB 的可用内部 SRAM。另外 Super FX / SA-1 / S-DD1 没有实现，
       这类卡带会黑屏。详见 [`components/snes9x/README.gamebox.md`](components/snes9x/README.gamebox.md)
 - [x] ROM 分区扩到 14 MB（35 款游戏，镜像 10.35 MB）
 

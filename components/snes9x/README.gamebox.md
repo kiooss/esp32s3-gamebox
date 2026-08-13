@@ -75,9 +75,13 @@ DSP-1 的调用量小，Mode 7 在 snes9x 里也比多层卷轴 + 大量精灵�
 | 异步推屏（PSRAM 影子缓冲）+ 音频按真实帧率产样 | 45 |
 | WRAM 挪进内部 SRAM（帧缓冲退回 PSRAM） | 42~44（更差，已回退） |
 
-最后一行最有信息量：**换哪块热内存进内部 SRAM 都救不了**。整个工作集
-（ROM 512 KB + SubScreen/ZBuffer 245 KB + WRAM 128 KB + VRAM 64 KB ≈ 950 KB）
-塞不进 179 KB 内部 SRAM，内存布局这条路已经走到头，再要速度只能动核心本身。
+最后一行证明的是：**用 WRAM 替换内部帧缓冲没有收益**。它不能推出所有内存布局都已
+测完——64 KiB VRAM 还没有做过内部 SRAM 对照。只是帧缓冲 119.5 KiB + VRAM 64 KiB
+已经超过约 179 KiB 的内部预算，测试 VRAM 时大概率必须把帧缓冲退回 PSRAM；而且
+512 KiB `IPPU.TileCache` 等热数据仍留在外部，所以不可能靠一次搬迁装下整个工作集。
+
+完整对象表、启动阶段 7.38 MiB 已知大块合计、稳定期估算和 SRAM 名词区分见
+[`../../docs/memory.md`](../../docs/memory.md)。
 
 音频不是瓶颈（实测 1.2 ms/帧）。上游 Retro-Go 的 README 把 SNES 标成
 "(slow)"、`main_snes.c` 把跳帧初值写死为 3，都和这里的实测一致。

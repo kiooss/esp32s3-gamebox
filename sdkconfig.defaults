@@ -11,6 +11,12 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 
+# 普通 malloc 也可以使用 PSRAM。16 KB 以下优先内部 SRAM，保住小对象/控制结构的
+# 访问速度；更大的模拟器数组优先 PSRAM。只是优先级，不是硬保证；关键缓冲仍用
+# heap_caps_malloc 明确指定位置。完整分配账见 docs/memory.md。
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+
 # 开了 PSRAM 之后，IDF 会从内部 RAM 划一块「只给内部/DMA 用」的保留池，默认 32 KB。
 # 那 32 KB 是给 WiFi/BT 这类必须用内部 DMA 内存的驱动留的，本项目两样都不用 ——
 # 自己要的内部 DMA 内存只有 SPI 描述符和几百字节的行缓冲。
@@ -27,6 +33,6 @@ CONFIG_NEWLIB_NANO_FORMAT=n
 # 而 NES 一帧才 16.7ms —— 配速会被抖成锯齿。
 CONFIG_FREERTOS_HZ=1000
 
-# 自定义分区表：多一个 4 MB 的 roms 分区放全部游戏。见 partitions.csv。
+# 自定义分区表：多一个 14 MB 的 roms 分区放全部游戏。见 partitions.csv。
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
