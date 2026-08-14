@@ -30,7 +30,7 @@ ESP32-S3-DevKitC-1 兼容板（N16R8）+ ST7789 SPI 屏（240×320，横屏 320�
       这类卡带会黑屏。详见 [`components/snes9x/README.gamebox.md`](components/snes9x/README.gamebox.md)
 - [x] SMW 即时存档：SELECT + START 长按 1 秒，RST 后启动同一 ROM 自动恢复；
       960 KiB FAT + wear levelling，双槽交替写和 CRC 防断电损坏
-- [x] ROM 分区扩到 14 MB（35 款游戏，镜像 10.35 MB）
+- [x] ROM 分区 14 MiB；当前 25 款游戏逐条 Deflate 后镜像约 8.12 MiB
 
 ROM 说明：商业 NES/GB/GBC/SNES ROM 都是版权物，**本仓库不包含**，需由使用者自备。
 随仓库分发的三个 `.nes` 是 nofrendo 测试套件里的公有领域 homebrew，用于验证。
@@ -43,7 +43,7 @@ ROM 说明：商业 NES/GB/GBC/SNES ROM 都是版权物，**本仓库不包含**
 | `main/display.c` | ST7789 显示层。条带流式推屏 + 核 1 推屏任务，对上层只暴露「按条带填像素」 |
 | `main/nes_emu.c` | 适配层。把 nofrendo 的 8 位调色板画面逐条带转成 RGB565 推屏 |
 | `main/gbc_emu.c` | GB/GBC 适配层。把 160×144 大端 RGB565 等比放大到 240×216，并接入公共输入/音频 |
-| `roms/` | 本地游戏库；`.nes/.gb/.gbc` 会被打成 mmap ROM 分区镜像，不入库 |
+| `roms/` | 本地游戏库；`.nes/.gb/.gbc/.sfc/.smc` 会逐条压缩进 ROM 分区镜像，不入库 |
 | `main/roms/` | 内置 ROM（公有领域测试 ROM） |
 | `components/nofrendo/` | NES 模拟器核心，取自 [retro-go](https://github.com/ducalex/retro-go)，**未改动源码** |
 | `components/gnuboy/` | GB/GBC 模拟器核心，取自 Retro-Go；宿主适配放在 `main/` |
@@ -143,9 +143,10 @@ malloc 一块内部缓冲再 memcpy —— 数据最后照样落在内部 RAM，
 
 ### 换 ROM
 
-日常游戏库放在顶层 `roms/`：支持 `.nes`、`.gb`、`.gbc`，运行 `idf.py build` 会生成
-`build/roms.bin`，再用 `idf.py flash-roms` 单独烧入。开机菜单会显示 `NES/GB/GBC`
-类型；换游戏仍按板子 RST 重启，避免在不同模拟器之间留下运行时状态。
+日常游戏库放在顶层 `roms/`：支持 `.nes`、`.gb`、`.gbc`、`.sfc`、`.smc`。运行
+`idf.py build` 会把每个游戏独立压成 raw Deflate 并生成 `build/roms.bin`，再用
+`idf.py flash-roms` 单独烧入。开机菜单只读取目录；确认游戏后才把选中的一份解到
+PSRAM，其他游戏不占运行内存。换游戏仍按板子 RST 重启，避免在模拟器之间留下状态。
 
 选单里按下方面键（SNES B / Shield C）可切换声音开关，标题右侧会
 显示当前状态。开关只对本次开机有效；按 RST 换游戏或重新上电后总会恢复为开启。

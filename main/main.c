@@ -129,17 +129,17 @@ void app_main(void)
 #endif
     splash();
 
-    /* 开机选单：从 roms 分区列出全部游戏。分区没烧过就退回编译期嵌入的那个
-     * （传 NULL 让 nes_emu_run 自己取）。 */
-    const uint8_t *rom  = NULL;
-    size_t         size = 0;
-    const char    *name = NULL;
-    rom_system_t   system = ROM_SYSTEM_NES;
-    rom_menu_pick(&rom, &size, &name, &system);
+    /* 开机选单只返回目录项；各模拟器在自己的大块内存准备妥当后再解压，SNES
+     * 尤其不能先解出 4 MiB 再复制一份，否则 8 MiB PSRAM 会在峰值时耗尽。
+     * 分区不可用时 entry 留 NULL，NES 继续走编译期嵌入 ROM 的回退路径。 */
+    const rom_store_entry_t *entry = NULL;
+    uint16_t launch_keys = 0;
+    rom_menu_pick(&entry, &launch_keys);
 
-    esp_err_t run_err = system == ROM_SYSTEM_NES  ? nes_emu_run(rom, size, name)
-                      : system == ROM_SYSTEM_SNES ? snes_emu_run(rom, size, name)
-                                                  : gbc_emu_run(rom, size, name);
+    rom_system_t system = entry ? entry->system : ROM_SYSTEM_NES;
+    esp_err_t run_err = system == ROM_SYSTEM_NES  ? nes_emu_run(entry)
+                      : system == ROM_SYSTEM_SNES ? snes_emu_run(entry, launch_keys)
+                                                  : gbc_emu_run(entry);
     if (run_err != ESP_OK) {
         ESP_LOGE(TAG, "模拟器启动失败");
     }

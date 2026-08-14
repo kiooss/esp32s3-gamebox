@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
+#include "rom_store.h"
 
-/* ROM 必须是完整的 .gb/.gbc 数据，通常直接指向 roms 分区的 mmap 地址。 */
-esp_err_t gbc_emu_run(const uint8_t *rom, size_t rom_size, const char *name);
+/* 选中后才把这一份 .gb/.gbc 解到 PSRAM，gnuboy 的 bank 指针会长期引用它。 */
+esp_err_t gbc_emu_run(const rom_store_entry_t *entry);

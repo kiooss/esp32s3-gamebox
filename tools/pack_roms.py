@@ -3,18 +3,21 @@
 
 镜像格式（小端，和 ESP32 一致）：
 
-    偏移 0    magic  "GAMEBOX\\0"        8 字节
+    偏移 0    magic  "GBOXDFL\\0"        8 字节
     偏移 8    count                      uint32，条目数
-    偏移 12   目录项 x count，每项 52 字节：
+    偏移 12   目录项 x count，每项 64 字节：
                   name    char[40]       显示名，NUL 结尾
                   system  uint32         1=NES, 2=GB, 3=GBC, 4=SNES
-                  offset  uint32         ROM 数据在**镜像**内的绝对偏移
-                  size    uint32         ROM 字节数
-    之后      各 ROM 数据，4 字节对齐
+                  codec   uint32         0=原样，1=raw DEFLATE
+                  offset  uint32         存储数据在**镜像**内的绝对偏移
+                  stored  uint32         压缩后的存储字节数
+                  raw     uint32         解压后的 ROM 字节数
+                  crc32   uint32         原始 ROM 的 CRC32
+    之后      各 ROM 独立压缩的数据，4 字节对齐
 
-故意不用文件系统。这个格式能让固件直接 esp_partition_mmap 整个分区，
-ROM 指针原样传给对应模拟器 —— 走 flash cache，零拷贝、不占 RAM。
-SPIFFS 做不到这点（不能 mmap），得把 ROM 整份读进内存。
+故意不用 ZIP 文件系统：这里已有一张可随机访问的目录表，再套 ZIP 中央目录只会
+重复。每个游戏独立压缩，菜单无需解压整包；选中后才把一个 ROM 解到 PSRAM。
+如果某个文件压缩后没有变小，则保留原样，仍可直接 mmap 零拷贝。
 
 用法：
     python3 tools/pack_roms.py roms/ build/roms.bin
@@ -24,15 +27,19 @@ import os
 import re
 import struct
 import sys
+import zlib
 
-MAGIC = b"GAMEBOX\0"
+MAGIC = b"GBOXDFL\0"
 NAME_LEN = 40           # 含结尾 NUL，所以显示名最长 39 字节
-ENTRY_FMT = "<%dsIII" % NAME_LEN
+ENTRY_FMT = "<%dsIIIIII" % NAME_LEN
 ENTRY_SIZE = struct.calcsize(ENTRY_FMT)
 HEADER_FMT = "<8sI"
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
 
-assert ENTRY_SIZE == 52, ENTRY_SIZE
+assert ENTRY_SIZE == 64, ENTRY_SIZE
+
+CODEC_RAW = 0
+CODEC_DEFLATE = 1
 
 SYSTEM_NES = 1
 SYSTEM_GB = 2
@@ -111,6 +118,18 @@ def snes_ok(data):
     return None
 
 
+def compress_rom(data):
+    """返回 (codec, payload)。
+
+    wbits=-15 生成没有 zlib/ZIP 外壳的 raw DEFLATE，板上可以直接交给
+    ESP-IDF 自带的 tinfl。只在确实变小时采用，避免小 ROM 被压缩头反向撑大。
+    """
+    compressor = zlib.compressobj(level=9, wbits=-15)
+    packed = compressor.compress(data) + compressor.flush()
+    return ((CODEC_DEFLATE, packed) if len(packed) < len(data)
+            else (CODEC_RAW, data))
+
+
 def roms_partition_size():
     """从 partitions.csv 读 roms 分区的容量（字节）。读不到就返回 None 不拦。
 
@@ -164,7 +183,8 @@ def main():
         if system is None:
             print("  跳过（ROM 头无效）: %s" % os.path.basename(p))
             continue
-        roms.append((display_name(p), data, system))
+        codec, payload = compress_rom(data)
+        roms.append((display_name(p), data, payload, system, codec))
 
     if not roms:
         sys.exit("没有一个文件通过 ROM 头校验")
@@ -173,14 +193,16 @@ def main():
     # 先算好每个 ROM 的偏移，再一次写出去。
     cursor = HEADER_SIZE + ENTRY_SIZE * len(roms)
     entries, blobs = [], []
-    for name, data, system in roms:
+    for name, data, payload, system, codec in roms:
         pad = (-cursor) % 4
         if pad:
             blobs.append(b"\0" * pad)
             cursor += pad
-        entries.append(struct.pack(ENTRY_FMT, name, system, cursor, len(data)))
-        blobs.append(data)
-        cursor += len(data)
+        entries.append(struct.pack(
+            ENTRY_FMT, name, system, codec, cursor, len(payload), len(data),
+            zlib.crc32(data) & 0xFFFFFFFF))
+        blobs.append(payload)
+        cursor += len(payload)
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "wb") as fh:
@@ -192,10 +214,17 @@ def main():
 
     total = os.path.getsize(out_path)
     print("打包 %d 个 ROM -> %s (%.0f KB)" % (len(roms), out_path, total / 1024))
-    for name, data, system in roms:
-        print("  %-4s %-36s %6.0f KB" % (
+    raw_total = sum(len(data) for _, data, _, _, _ in roms)
+    stored_total = sum(len(payload) for _, _, payload, _, _ in roms)
+    for name, data, payload, system, codec in roms:
+        print("  %-4s %-36s %6.0f -> %6.0f KB  %s" % (
             SYSTEM_NAMES[system], name.decode("utf-8", "replace"),
-            len(data) / 1024))
+            len(data) / 1024, len(payload) / 1024,
+            "deflate" if codec == CODEC_DEFLATE else "raw"))
+    print("ROM 数据 %.2f -> %.2f MiB，节省 %.2f MiB（%.1f%%）" % (
+        raw_total / 1048576, stored_total / 1048576,
+        (raw_total - stored_total) / 1048576,
+        (raw_total - stored_total) * 100 / raw_total))
 
     # 超了 esptool 也会报错，但在这里说清楚更好定位。
     # 容量从 partitions.csv 现读而不是写死：以前这里硬编码 8 MB，

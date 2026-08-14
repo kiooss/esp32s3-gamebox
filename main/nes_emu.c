@@ -48,10 +48,10 @@ static const char *TAG = "nes";
  *
  * ⚠ 平时换游戏**不用改这里** —— 开机选单（rom_menu.c）会列出 roms 分区里
  * 全部游戏让你选。这个宏只决定「选单不可用时跑哪个」：roms 分区还没烧过
- * （`idf.py flash-roms`）、或者镜像坏了的时候，nes_emu_run(NULL,...) 会回退到它。
+ * （`idf.py flash-roms`）、或者镜像坏了的时候，nes_emu_run(NULL) 会回退到它。
  *
  * 留着这条回退路径的理由：选单是新东西，它坏了不该让整块板子玩不了游戏。
- * 顺便也保住了「只烧固件、不烧 8 MB 的 ROM 分区」这个快速迭代路径。
+ * 顺便也保住了「只烧固件、不烧 14 MiB 的 ROM 分区」这个快速迭代路径。
  *
  * 游戏（都在 main/roms/，加新的要同时在 main/CMakeLists.txt 的 EMBED_FILES 里登记）：
  *
@@ -331,13 +331,24 @@ void nes_emu_release_prealloc(void)
     }
 }
 
-esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
+esp_err_t nes_emu_run(const rom_store_entry_t *entry)
 {
-    /* 没给 ROM 就用编译期嵌进来的那个 —— roms 分区还没烧过时的回退路径。 */
-    if (!rom) {
+    rom_store_image_t image = {0};
+    const uint8_t *rom;
+    size_t rom_size;
+    const char *name;
+
+    /* 没有目录项就用编译期嵌进来的那个；压缩条目只在确认选择后占 PSRAM。 */
+    if (!entry) {
         rom      = rom_start;
         rom_size = rom_end - rom_start;
         name     = ROM_NAME;
+    } else {
+        esp_err_t err = rom_store_load(entry, 0, &image);
+        if (err != ESP_OK) return err;
+        rom = image.data;
+        rom_size = image.size;
+        name = entry->name;
     }
     printf("\nROM: %s  (%u 字节)\n", name, (unsigned)rom_size);
 
@@ -347,6 +358,7 @@ esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
     if (nofrendo_init(SYS_DETECT, NES_AUDIO_SAMPLE_RATE, false, blit_frame,
                       NULL, NULL) != 0) {
         ESP_LOGE(TAG, "nofrendo 初始化失败");
+        rom_store_image_release(&image);
         return ESP_FAIL;
     }
 
@@ -358,6 +370,7 @@ esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
 
     if (build_palette() != ESP_OK) {
         ESP_LOGE(TAG, "调色板构建失败");
+        rom_store_image_release(&image);
         return ESP_FAIL;
     }
 
@@ -367,16 +380,19 @@ esp_err_t nes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
     if (!s_vidbuf[0] || !s_vidbuf[1]) {
         ESP_LOGE(TAG, "视频缓冲分配失败（需要 2x%d 字节内部 RAM）",
                  NES_SCREEN_PITCH * NES_SCREEN_HEIGHT);
+        rom_store_image_release(&image);
         return ESP_ERR_NO_MEM;
     }
-    /* ROM 数据留在 flash 里（走 cache 映射），rom_loadmem 只存指针不拷贝 */
+    /* 原样 ROM 留在 flash，Deflate ROM 留在 PSRAM；rom_loadmem 都只存指针。 */
     rom_t *cart = rom_loadmem((uint8_t *)rom, rom_size);
     if (!cart) {
         ESP_LOGE(TAG, "ROM 解析失败（不是合法的 iNES 文件？）");
+        rom_store_image_release(&image);
         return ESP_FAIL;
     }
     if (nes_insertcart(cart) != 0) {
         ESP_LOGE(TAG, "装卡失败（mapper %d 不支持？）", cart->mapper_number);
+        rom_store_image_release(&image);
         return ESP_FAIL;
     }
 

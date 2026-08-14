@@ -16,13 +16,13 @@
 
 /* 显示选单并阻塞，直到用户选定一个游戏。
  *
- * 选中的 ROM 通过出参返回：`*data` / `*size` 可以直接喂给 nes_emu_run()，
- * `*name` 是显示名（指向 mmap 区域，一直有效）。
+ * 选中的目录项通过 `*entry` 返回；模拟器再按条目决定是直接 mmap 还是解压。
+ * `*launch_keys` 保存确认瞬间的完整 SNES 面键状态，避免大 ROM 解压期间用户
+ * 已松开 X/Y，导致“恢复上一份/从头开始”修饰键丢失。
  *
  * 返回 false 表示选单没法用（roms 分区没烧过、镜像坏了、或者只有一个游戏
  * 没必要选）—— 这时出参不变，调用方应当用编译期嵌入的那个 ROM。
  *
  * 前置条件：display_init() 已经成功。输入初始化在函数内部做（幂等，
  * nes_emu_run() 之后再调一次没关系）。 */
-bool rom_menu_pick(const uint8_t **data, size_t *size, const char **name,
-                   rom_system_t *system);
+bool rom_menu_pick(const rom_store_entry_t **entry, uint16_t *launch_keys);

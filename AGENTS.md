@@ -21,7 +21,7 @@ idf.py flash-roms                                          # 只在加/删 roms/
 - 端口是板载 FT232R（丝印 `COM` 的 Type-C 口）。`A5069RR4` 是这颗芯片的序列号，
   换板子会变，用 `ls /dev/cu.usbserial-*` 确认。
 - `flash-roms` 是顶层 `CMakeLists.txt` 注册的自定义 target，**故意不挂在 `idf.py flash` 上**：
-  ROM 分区 14 MB，当前镜像 10.35 MB，烧一次要几分钟，而它几乎从不变。
+  ROM 分区 14 MB，当前 25-ROM Deflate 镜像约 8.12 MiB，烧一次仍较久，而它几乎从不变。
   烧录时间只跟镜像实际字节数走（`esptool write_flash` 写的是文件），跟分区开多大无关。
 - `sdkconfig` 不入库，由 `sdkconfig.defaults` 生成。要固化配置就改 `.defaults`，
   别改 `sdkconfig`（会被覆盖）。里面每一条都有理由（240 MHz CPU、1000 Hz tick、
@@ -90,12 +90,14 @@ idf.py flash-roms                                          # 只在加/删 roms/
 
 ### ROM 来源：分区 mmap，编译期嵌入做回退
 
-- `roms/*.nes` → `tools/pack_roms.py` 打成自定义镜像（magic + 定长目录表 + 拼接数据）
+- `roms/*.{nes,gb,gbc,sfc,smc}` → `tools/pack_roms.py` 打成自定义镜像
+  （magic + 定长目录表 + 每个 ROM 独立 raw Deflate）
   → 烧进 `partitions.csv` 里 offset `0x110000` 的 14 MB `roms` 分区（子类型 0x40）。
   分区容量由 `pack_roms.py` 的 `roms_partition_size()` 现读 `partitions.csv`，
   改分区大小不用再同步脚本（以前写死 8 MB，扩容时忘了改会在打包这步炸）。
-- `rom_store.c` 一次 `esp_partition_mmap` 整个分区，`data` 指针原样喂给 nofrendo 的
-  `rom_loadmem` —— 走 flash cache，零拷贝、不占 RAM。**故意不用 SPIFFS**：文件系统不能 mmap。
+- `rom_store.c` 一次 `esp_partition_mmap` 整个分区，菜单只读目录；确认后只把选中的
+  Deflate ROM 解到 PSRAM。SNES 必须直接解到最终可写缓冲，不能先解一份再复制 4 MiB。
+  **故意不用 SPIFFS/ZIP 文件系统**：自定义目录已经提供随机访问，套第二层目录只会重复。
 - `rom_store_init()` 的校验写得很啰嗦是因为 offset/size 直接当指针用，而数据来自 flash
   （没烧过时全是 0xFF）。所有失败都只返回 0、不 abort，调用方回退到 `ROM_CHOICE` 选的嵌入 ROM。
 

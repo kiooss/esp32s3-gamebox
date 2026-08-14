@@ -32,7 +32,6 @@
 #include "nes_emu.h"
 #include "rgb_led.h"
 #include "snes_save.h"
-#include "esp_crc.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -295,7 +294,7 @@ static void relocate_wram_internal(void)
     ESP_LOGI(TAG, "WRAM %d KB 已挪进内部 SRAM", RAM_SIZE / 1024);
 }
 
-static esp_err_t install_rom(const uint8_t *rom, size_t rom_size)
+static esp_err_t install_rom(const rom_store_entry_t *entry, uint32_t *rom_crc)
 {
     if (Memory.ROM) {
         free(Memory.ROM - Memory.ROM_Offset);
@@ -303,35 +302,34 @@ static esp_err_t install_rom(const uint8_t *rom, size_t rom_size)
         Memory.ROM_Offset = 0;
     }
 
-    uint8_t *buf = heap_caps_malloc(rom_size + SNES_ROM_SLACK,
-                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!buf) return ESP_ERR_NO_MEM;
+    /* S9xInitMemory() 刚释放出的 6 MiB 先还给 PSRAM，再把压缩数据直接展开到
+     * 最终缓冲。若先在外面解压再 memcpy，4 MiB DKC 会同时占两份而失败。 */
+    rom_store_image_t image = {0};
+    esp_err_t err = rom_store_load(entry, SNES_ROM_SLACK, &image);
+    if (err != ESP_OK) return err;
+    if (!image.owned) {
+        rom_store_image_release(&image);
+        return ESP_ERR_INVALID_STATE; /* extra_bytes 保证一定得到可写缓冲 */
+    }
 
-    memcpy(buf, rom, rom_size);
-    memset(buf + rom_size, 0, SNES_ROM_SLACK);
-
-    Memory.ROM           = buf;
-    Memory.ROM_AllocSize = rom_size;   /* LoadROM(NULL) 把它当文件长度 */
+    Memory.ROM           = image.data;
+    Memory.ROM_AllocSize = image.size; /* LoadROM(NULL) 把它当文件长度 */
+    *rom_crc = image.crc32;
     return ESP_OK;
 }
 
-esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
+esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
 {
-    if (!rom || rom_size < 1024) return ESP_ERR_INVALID_ARG;
+    if (!entry || entry->size < 1024) return ESP_ERR_INVALID_ARG;
 
-    /* 菜单已经初始化过输入，这几次调用仍保持幂等。必须在耗时的缓冲分配和
-     * ROM 解析之前立刻记住确认时的面键，否则快速松开 X/Y 会在约百毫秒后
-     * 才轮询时漏掉，用户就得莫名其妙一直按到标题画面。 */
+    /* 菜单已经初始化过输入，这几次调用仍保持幂等。launch_keys 是确认瞬间
+     * 捕获的状态，不会因为大 ROM 解压耗时而丢掉 X/Y 修饰键。 */
     input_serial_init();
     input_usb_init();
     input_gamepad_init();
-    uint16_t launch_keys = input_serial_poll() | input_gamepad_poll() |
-                           input_usb_poll();
 
-    uint32_t rom_crc = esp_crc32_le(0, rom, rom_size);
-
-    printf("\nROM: %s  (%u 字节，SNES)\n", name ? name : "(unknown)",
-           (unsigned)rom_size);
+    printf("\nROM: %s  (%u 字节，SNES)\n", entry->name,
+           (unsigned)entry->size);
     display_stream_sync(black_strip, NULL);
 
     /* 先把 NES 预留的 128 KB 内部 SRAM 拿回来 —— 我们的帧缓冲要 119 KB，
@@ -374,10 +372,11 @@ esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
     relocate_wram_internal();
 #endif
 
-    err = install_rom(rom, rom_size);
+    uint32_t rom_crc = 0;
+    err = install_rom(entry, &rom_crc);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "ROM 拷入 PSRAM 失败（需要 %u KB）",
-                 (unsigned)((rom_size + SNES_ROM_SLACK) / 1024));
+                 (unsigned)((entry->size + SNES_ROM_SLACK) / 1024));
         return err;
     }
     if (!LoadROM(NULL)) {

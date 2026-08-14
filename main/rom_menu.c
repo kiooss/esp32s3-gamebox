@@ -52,7 +52,7 @@ static const char *TAG = "menu";
 
 #define POLL_MS     16      /* 约 60 Hz，和游戏帧率一个量级 */
 
-static uint8_t poll_input(void)
+static uint16_t poll_input(void)
 {
     return input_serial_poll() | input_gamepad_poll() | input_usb_poll();
 }
@@ -149,8 +149,7 @@ static void draw(int count, int sel)
     display_stream_sync(draw_strip, &a);
 }
 
-bool rom_menu_pick(const uint8_t **data, size_t *size, const char **name,
-                   rom_system_t *system)
+bool rom_menu_pick(const rom_store_entry_t **entry, uint16_t *launch_keys)
 {
     int count = rom_store_init();
     if (count <= 0) {
@@ -168,14 +167,14 @@ bool rom_menu_pick(const uint8_t **data, size_t *size, const char **name,
     printf("（想换游戏按板子上的 RST 重启）\n\n");
 
     int sel = 0;
-    uint8_t prev = poll_input();    /* 先读一次当基线：上电时可能有键按着 */
+    uint16_t prev = poll_input();   /* 先读一次当基线：上电时可能有键按着 */
     draw(count, sel);
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
 
-        uint8_t now = poll_input();
-        uint8_t edge = now & ~prev;     /* 这一帧新按下的位 */
+        uint16_t now = poll_input();
+        uint16_t edge = now & ~prev;    /* 这一帧新按下的位 */
         prev = now;
 
         /* B 在开机选单里没有游戏语义，正好做本次开机的声音开关；进游戏后
@@ -190,12 +189,11 @@ bool rom_menu_pick(const uint8_t **data, size_t *size, const char **name,
         if (edge & NES_PAD_A || edge & NES_PAD_START) {
             const rom_store_entry_t *e = rom_store_entry(sel);
             if (!e) continue;           /* 不该发生，稳妥起见 */
-            *data = e->data;
-            *size = e->size;
-            *name = e->name;
-            *system = e->system;
-            printf("选中：[%s] %s（%u 字节）\n\n", system_name(e->system),
-                   e->name, (unsigned)e->size);
+            *entry = e;
+            *launch_keys = now;
+            printf("选中：[%s] %s（ROM %u KB，分区 %u KB）\n\n",
+                   system_name(e->system), e->name, (unsigned)(e->size / 1024),
+                   (unsigned)(e->stored_size / 1024));
             return true;
         }
 

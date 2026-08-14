@@ -61,22 +61,24 @@ Snes9x 的 `Memory.SRAM` 是被模拟卡带的电池存档 RAM，只是一个 64
 ## 3. 16 MiB Flash 怎么使用
 
 Flash 和 PSRAM 是两套独立资源。ROM 分区的 mmap 只消耗 Flash 地址映射窗口和少量页表，
-不会把整个 ROM 镜像复制到 PSRAM。
+不会把整个 ROM 镜像复制到 PSRAM；选中游戏后只解压那一个 ROM。
 
 | 分区 | 起点 | 分配大小 | 当前用途 |
 |---|---:|---:|---|
 | NVS | `0x009000` | 24 KiB | ESP-IDF 预留的持久配置空间 |
 | PHY init | `0x00F000` | 4 KiB | ESP-IDF PHY 数据 |
 | factory app | `0x010000` | 1 MiB | 固件；六键 + 即时存档参考构建约 968 KiB，余约 79 KiB |
-| roms | `0x110000` | 14 MiB | 当前参考镜像 10,848,792 字节（约 10.35 MiB） |
+| roms | `0x110000` | 14 MiB | 25 个 ROM；14.91 MiB 原始数据压成约 8.12 MiB |
 | snes_save | `0xF10000` | 960 KiB | SMW 即时存档，FAT + wear levelling |
 
 `roms` 分区止于 `0xF10000`，其后的 960 KiB 已全部分给 `snes_save`。ROM 镜像只在
 加、删或替换游戏时用 `idf.py flash-roms` 单独烧录，普通 `idf.py flash` 不更新它；
 普通烧固件会更新分区表，但不会主动擦除已有的存档分区。
 
-NES 和 GB/GBC 可以直接使用 mmap 的只读 ROM 指针。SNES 是例外：Snes9x 的装载流程会
-就地移动 512 字节头并改写映射区域，所以适配层必须把所选 ROM 复制到 PSRAM。
+新镜像把每个游戏独立保存为 raw Deflate，菜单阶段只读 mmap 目录；NES、GB/GBC 在
+确认后把选中的 ROM 解到 PSRAM，核心的 bank 指针长期引用这块缓冲。SNES 的装载流程
+还会就地改写映射区域，因此先释放 Snes9x 贪心申请的 6 MiB ROM 缓冲，再直接解压到
+带映射余量的最终缓冲；不能先解压一份再复制，否则 4 MiB 卡带会耗尽 8 MiB PSRAM。
 
 SMW 单份未压缩即时状态固定为 365,120 字节（356.6 KiB）。存档层使用两个交替文件：
 写新槽期间保留上一槽，完整关闭文件、重新读取并校验 CRC 后才提交元数据。RST 或断电

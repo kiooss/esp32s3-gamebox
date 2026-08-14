@@ -8,6 +8,7 @@ idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
                        INCLUDE_DIRS "."
                        REQUIRES nofrendo gnuboy snes9x
                                 esp_partition  # roms 分区 mmap
+                                esp_rom        # ROM 内置 tinfl，解压逐条 Deflate ROM
                                 esp_lcd
                                 esp_driver_spi
                                 esp_driver_gpio

@@ -122,19 +122,27 @@ static esp_err_t alloc_buffers(void)
     return s_soundbuf ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
-esp_err_t gbc_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
+esp_err_t gbc_emu_run(const rom_store_entry_t *entry)
 {
-    if (!rom || rom_size < 0x150) return ESP_ERR_INVALID_ARG;
+    if (!entry || entry->size < 0x150) return ESP_ERR_INVALID_ARG;
+
+    rom_store_image_t image = {0};
+    esp_err_t err = rom_store_load(entry, 0, &image);
+    if (err != ESP_OK) return err;
+    const uint8_t *rom = image.data;
+    size_t rom_size = image.size;
+    const char *name = entry->name;
 
     printf("\nROM: %s  (%u 字节，GB/GBC)\n", name ? name : "(unknown)",
            (unsigned)rom_size);
     display_stream_sync(black_strip, NULL);
 
-    esp_err_t err = alloc_buffers();
+    err = alloc_buffers();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "GB/GBC 缓冲分配失败：需要 2x%d KB PSRAM + %d 字节内部 RAM",
                  (GB_WIDTH * GB_HEIGHT * 2) / 1024,
                  GBC_AUDIO_S16_COUNT * (int)sizeof(int16_t));
+        rom_store_image_release(&image);
         return err;
     }
 
@@ -147,10 +155,12 @@ esp_err_t gbc_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
     if (gnuboy_init(AUDIO_OUTPUT_SAMPLE_RATE, GB_AUDIO_STEREO_S16,
                     GB_PIXEL_565_BE, video_callback, audio_callback) != 0) {
         ESP_LOGE(TAG, "gnuboy 初始化失败");
+        rom_store_image_release(&image);
         return ESP_FAIL;
     }
     if (gnuboy_load_rom(rom, rom_size) != 0) {
         ESP_LOGE(TAG, "ROM 解析失败（不是受支持的 GB/GBC 卡带？）");
+        rom_store_image_release(&image);
         return ESP_FAIL;
     }
 
