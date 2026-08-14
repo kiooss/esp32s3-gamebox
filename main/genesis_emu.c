@@ -48,6 +48,9 @@ static const char *TAG = "genesis";
 #define GEN_AUDIO_BUF_LEN  GWENESIS_AUDIO_BUFFER_LENGTH_PAL
 #define GEN_FRAME_SKIP     3u
 
+_Static_assert(GEN_SOURCE_W <= DISP_W && GEN_VISIBLE_H <= DISP_H,
+               "Genesis 原生画布必须能装进面板");
+
 /* retro-go 核心从宿主取得这些逐帧变量和声音缓冲。声音先按约 53 kHz 生成，
  * 提交给 MAX98357 前抽取为约 26 kHz，数组大小同时覆盖 PAL 的最长一帧。 */
 int system_clock;
@@ -73,6 +76,7 @@ typedef struct {
     uint8_t *storage;
     uint8_t *pixels;
     uint16_t palette[256];
+    int width;
     int height;
     uint32_t hash;
 } genesis_frame_t;
@@ -144,10 +148,16 @@ static void genesis_strip(uint16_t *strip, int y0, int h, void *ctx)
 
     for (int y = 0; y < h; y++) {
         const uint8_t *src = frame->pixels + (y0 + y + crop_y) * GEN_SOURCE_W;
-        uint16_t *dst = strip + y * DISP_FB_W;
-        for (int x = 0; x < DISP_FB_W; x++) {
-            dst[x] = frame->palette[src[x * GEN_SOURCE_W / DISP_FB_W]];
+        uint16_t *dst = strip + y * GEN_SOURCE_W;
+        int source_w = frame->width;
+        if (source_w > GEN_SOURCE_W) source_w = GEN_SOURCE_W;
+        int left = (GEN_SOURCE_W - source_w) / 2;
+
+        for (int x = 0; x < left; x++) dst[x] = C_BLACK;
+        for (int x = 0; x < source_w; x++) {
+            dst[left + x] = frame->palette[src[x]];
         }
+        for (int x = left + source_w; x < GEN_SOURCE_W; x++) dst[x] = C_BLACK;
     }
 }
 
@@ -330,12 +340,13 @@ esp_err_t genesis_emu_run(const rom_store_entry_t *entry)
 
         if (render) {
             genesis_frame_t *frame = &s_frames[s_frame_index];
+            frame->width = screen_width;
             frame->height = screen_height;
             for (int i = 0; i < 256; i++) frame->palette[i] = swap16(CRAM565[i]);
             frame->hash = frame_hash(frame);
             if (previous_hash && frame->hash != previous_hash) changed++;
             previous_hash = frame->hash;
-            display_stream(genesis_strip, frame);
+            display_stream_sized(genesis_strip, frame, GEN_SOURCE_W, GEN_VISIBLE_H);
             s_frame_index ^= 1;
             presented++;
         }

@@ -124,28 +124,35 @@
 #define C_MAGENTA RGB565(255, 0,   255)
 #define C_GRAY    RGB565(128, 128, 128)
 
-/* 初始化 SPI + 面板 + 背光，分配两块条带缓冲，并在核 1 上起一个推屏任务。 */
+/* 初始化 SPI + 面板 + 背光，分配两块可覆盖整屏宽度的条带缓冲，
+ * 并在核 1 上起一个推屏任务。 */
 esp_err_t display_init(void);
 
 /* ============ 条带流式推屏 ============
  *
- * 这里**没有常驻帧缓冲**。整块 288x224 的 RGB565 要 126 KB，两块就是 252 KB，
- * 内部 DMA 内存装不下（PSRAM 走不了 DMA，原因见 display.c）。
+ * 这里**没有常驻帧缓冲**。默认 288x224 画布的 RGB565 要 126 KB，两块就是
+ * 252 KB，内部 DMA 内存装不下（PSRAM 走不了 DMA，原因见 display.c）。
  *
- * 所以改成：只留两块 288x32 的小条带缓冲（各 18 KB），核 1 一边把第 N+1 条
- * 转换进一块、一边 DMA 推第 N 条，流水起来。调用方只要提供「把画布的第
- * y0..y0+h-1 行画进这块条带」的回调。
+ * 所以改成：只留两块最大 320x32 的小条带缓冲（各 20 KB），核 1 一边把第
+ * N+1 条转换进一块、一边 DMA 推第 N 条，流水起来。调用方只要提供「把画布的
+ * 第 y0..y0+h-1 行画进这块条带」的回调。
  *
  * 双缓冲并没有消失，只是下移了一层：NES 那边缓冲的是 8 位的 vidbuf（每块
  * 64 KB，比 RGB565 便宜一半），核 0 渲染下一帧的同时核 1 在读上一帧。
  * 帧时间仍然是 max(模拟, 推屏)，不是两者相加。
  *
- * 回调在**核 1** 上执行。传进去的 ctx 必须在整帧推完前保持有效。 */
+ * 回调在**核 1** 上执行。传进去的 ctx 必须在整帧推完前保持有效。
+ * strip 的每行跨度等于本次提交的画布宽度：display_stream() 是 DISP_FB_W，
+ * display_stream_sized() 则是它的 width 参数。 */
 typedef void (*disp_strip_fn)(uint16_t *strip, int y0, int h, void *ctx);
 
 /* 提交一帧并立刻返回，实际转换+推送在核 1 上进行。
  * 只有上一帧还没推完时才阻塞 —— 天然把帧率限制在屏幕吃得下的上限。 */
 void display_stream(disp_strip_fn fn, void *ctx);
+
+/* 提交一帧自定义尺寸的居中画布。用于 Genesis 原生 320x224；width/height
+ * 不能超过面板尺寸。其他模拟器继续调用 display_stream() 使用默认画布。 */
+void display_stream_sized(disp_strip_fn fn, void *ctx, int width, int height);
 
 /* 同上，但等这一帧推完才返回。ctx 指向栈上数据时用这个。 */
 void display_stream_sync(disp_strip_fn fn, void *ctx);

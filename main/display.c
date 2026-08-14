@@ -8,8 +8,8 @@
  * 画布 288x224 的 RGB565 是 126 KB，双缓冲要 252 KB，内部 DMA 内存装不下
  * （PSRAM 不能直接 DMA，原因见下面 display_init 里的注释）。
  *
- * 所以这里只留两块 288x32 的条带缓冲（各 18 KB）：核 1 把第 N+1 条转换进
- * 一块的同时，DMA 正在推第 N 条，两者流水。整块画布由调用方提供的
+ * 所以这里只留两块最大 320x32 的条带缓冲（各 20 KB）：核 1 把第 N+1 条
+ * 转换进一块的同时，DMA 正在推第 N 条，两者流水。整块画布由调用方提供的
  * disp_strip_fn 回调按条带现算，不需要落地。
  *
  * 双缓冲没有消失，只是下移到了 8 位的 NES vidbuf 那一层（每块 64 KB，比
@@ -56,11 +56,10 @@ static const char *TAG = "disp";
 
 /* 一条带多少行。选值理由见文件头的实测表：32 行 -> 224/32 = 7 条整带。 */
 #define BAND_LINES      32
-#define BAND_COUNT      ((DISP_FB_H + BAND_LINES - 1) / BAND_LINES)
-#define BAND_BYTES      (DISP_FB_W * BAND_LINES * 2)
-#define FB_BYTES        (DISP_FB_W * DISP_FB_H * 2)
+#define MAX_BAND_COUNT  ((DISP_H + BAND_LINES - 1) / BAND_LINES)
+#define BAND_BYTES      (DISP_W * BAND_LINES * 2)
 
-_Static_assert(BAND_COUNT >= 2, "条带数至少 2，否则流水不起来");
+_Static_assert(MAX_BAND_COUNT >= 2, "条带数至少 2，否则流水不起来");
 
 /* 每秒往串口打一行推屏耗时。调条带尺寸/画布尺寸时很有用，平时可以关掉。 */
 #define DISP_PROFILE    1
@@ -71,11 +70,17 @@ static esp_lcd_panel_io_handle_t s_io;
 static uint16_t          *s_strip[2];    /* 两块条带缓冲，转换/DMA 乒乓 */
 static disp_strip_fn      s_fn;          /* 本帧的绘制回调 */
 static void              *s_ctx;
+static int                s_frame_w = DISP_FB_W;
+static int                s_frame_h = DISP_FB_H;
+static int                s_frame_x = DISP_FB_X;
+static int                s_frame_y = DISP_FB_Y;
 
 /* 绘图原语的作用目标：当前正在填的那条带。只在核 1 的回调里有效。 */
 static uint16_t          *s_cur;         /* 当前条带缓冲 */
 static int                s_cur_y0;      /* 它对应画布的起始行 */
 static int                s_cur_h;       /* 它有多少行 */
+static int                s_cur_w;       /* 本帧画布宽度，也是条带行跨度 */
+static int                s_cur_frame_h; /* 本帧画布总高度 */
 
 static SemaphoreHandle_t  s_band_done;   /* 计数：每条带 DMA 传完 +1 */
 static SemaphoreHandle_t  s_submit;      /* 二值：有新帧待推 */
@@ -101,13 +106,18 @@ static void blit_task(void *arg)
 
     for (;;) {
         xSemaphoreTake(s_submit, portMAX_DELAY);
+        const int frame_w = s_frame_w;
+        const int frame_h = s_frame_h;
+        const int frame_x = s_frame_x;
+        const int frame_y = s_frame_y;
+        const int band_count = (frame_h + BAND_LINES - 1) / BAND_LINES;
 #if DISP_PROFILE
         int64_t push_t0 = esp_timer_get_time();
 #endif
 
-        for (int i = 0; i < BAND_COUNT; i++) {
+        for (int i = 0; i < band_count; i++) {
             int y0 = i * BAND_LINES;
-            int h  = DISP_FB_H - y0;
+            int h  = frame_h - y0;
             if (h > BAND_LINES) h = BAND_LINES;
 
             /* 乒乓：第 i 条要写的缓冲正是第 i-2 条用过的那块，
@@ -121,16 +131,20 @@ static void blit_task(void *arg)
             s_cur    = s_strip[i & 1];
             s_cur_y0 = y0;
             s_cur_h  = h;
+            s_cur_w  = frame_w;
+            s_cur_frame_h = frame_h;
             s_fn(s_cur, y0, h, s_ctx);
 
             esp_lcd_panel_draw_bitmap(s_panel,
-                                      DISP_FB_X,             DISP_FB_Y + y0,
-                                      DISP_FB_X + DISP_FB_W, DISP_FB_Y + y0 + h,
+                                      frame_x,           frame_y + y0,
+                                      frame_x + frame_w, frame_y + y0 + h,
                                       s_cur);
         }
-        /* 循环里少收了两条（i=0、1 时没等），这里补上，凑够 BAND_COUNT */
-        xSemaphoreTake(s_band_done, portMAX_DELAY);
-        xSemaphoreTake(s_band_done, portMAX_DELAY);
+        /* 循环里至多漏收两条（i=0、1 时没等），这里补齐最后的 DMA 回执。 */
+        int pending = band_count < 2 ? band_count : 2;
+        for (int i = 0; i < pending; i++) {
+            xSemaphoreTake(s_band_done, portMAX_DELAY);
+        }
 
 #if DISP_PROFILE
         acc += esp_timer_get_time() - push_t0;
@@ -142,7 +156,8 @@ static void blit_task(void *arg)
         int64_t now = esp_timer_get_time();
         if (now - t0 >= 1000000) {
             printf("推屏 %.2f ms/帧（%d 行/条 x %d 条 = %d 字节，%d 帧）\n",
-                   (float)acc / 1000.0f / n, BAND_LINES, BAND_COUNT, FB_BYTES, n);
+                   (float)acc / 1000.0f / n, BAND_LINES, band_count,
+                   frame_w * frame_h * 2, n);
             acc = 0; n = 0; t0 = now;
         }
 #endif
@@ -206,7 +221,7 @@ void display_backlight(int percent)
 
 esp_err_t display_init(void)
 {
-    s_band_done = xSemaphoreCreateCounting(BAND_COUNT * 2, 0);
+    s_band_done = xSemaphoreCreateCounting(MAX_BAND_COUNT * 2, 0);
     s_submit    = xSemaphoreCreateBinary();
     s_idle      = xSemaphoreCreateBinary();
     if (!s_band_done || !s_submit || !s_idle) return ESP_ERR_NO_MEM;
@@ -250,7 +265,7 @@ esp_err_t display_init(void)
         .dc_gpio_num       = DISP_PIN_DC,
         .spi_mode          = 0,
         .pclk_hz           = DISP_SPI_HZ,
-        .trans_queue_depth = BAND_COUNT + 2,
+        .trans_queue_depth = MAX_BAND_COUNT + 2,
         .lcd_cmd_bits      = 8,
         .lcd_param_bits    = 8,
         .on_color_trans_done = on_trans_done,
@@ -290,10 +305,10 @@ esp_err_t display_init(void)
     }
 
     ESP_LOGI(TAG, "ST7789 就绪 面板%dx%d @ %d MHz, gap(%d,%d), "
-                  "画布%dx%d@(%d,%d), 条带流式 %d 行x%d 条, 缓冲 2x%d KB",
+                  "默认画布%dx%d@(%d,%d), 最大条带宽 %d, 条带流式 %d 行, 缓冲 2x%d KB",
              DISP_W, DISP_H, DISP_SPI_HZ / 1000000, DISP_GAP_X, DISP_GAP_Y,
              DISP_FB_W, DISP_FB_H, DISP_FB_X, DISP_FB_Y,
-             BAND_LINES, BAND_COUNT, BAND_BYTES / 1024);
+             DISP_W, BAND_LINES, BAND_BYTES / 1024);
     return ESP_OK;
 }
 
@@ -305,11 +320,25 @@ void display_wait_idle(void)
 
 void display_stream(disp_strip_fn fn, void *ctx)
 {
+    display_stream_sized(fn, ctx, DISP_FB_W, DISP_FB_H);
+}
+
+void display_stream_sized(disp_strip_fn fn, void *ctx, int width, int height)
+{
+    if (!fn || width <= 0 || height <= 0 || width > DISP_W || height > DISP_H) {
+        ESP_LOGE(TAG, "拒绝非法画布 %dx%d（面板 %dx%d）", width, height, DISP_W, DISP_H);
+        return;
+    }
+
     /* 等推屏任务把上一帧收完。这里是唯一的阻塞点，也正好起到帧率节流的作用。 */
     xSemaphoreTake(s_idle, portMAX_DELAY);
 
     s_fn  = fn;
     s_ctx = ctx;
+    s_frame_w = width;
+    s_frame_h = height;
+    s_frame_x = (DISP_W - width) / 2;
+    s_frame_y = (DISP_H - height) / 2;
 
     xSemaphoreGive(s_submit);
 }
@@ -328,10 +357,10 @@ void display_stream_sync(disp_strip_fn fn, void *ctx)
 
 void display_pixel(int x, int y, uint16_t color)
 {
-    if ((unsigned)x >= DISP_FB_W) return;
+    if ((unsigned)x >= (unsigned)s_cur_w) return;
     int row = y - s_cur_y0;
     if ((unsigned)row >= (unsigned)s_cur_h) return;
-    s_cur[(size_t)row * DISP_FB_W + x] = color;
+    s_cur[(size_t)row * s_cur_w + x] = color;
 }
 
 void display_fill_rect(int x, int y, int w, int h, uint16_t color)
@@ -340,8 +369,8 @@ void display_fill_rect(int x, int y, int w, int h, uint16_t color)
     /* 先裁到画布 */
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
-    if (x + w > DISP_FB_W) w = DISP_FB_W - x;
-    if (y + h > DISP_FB_H) h = DISP_FB_H - y;
+    if (x + w > s_cur_w) w = s_cur_w - x;
+    if (y + h > s_cur_frame_h) h = s_cur_frame_h - y;
     if (w <= 0 || h <= 0) return;
 
     /* 再裁到当前条带 */
@@ -350,14 +379,14 @@ void display_fill_rect(int x, int y, int w, int h, uint16_t color)
     if (y_lo >= y_hi) return;
 
     for (int yy = y_lo; yy < y_hi; yy++) {
-        uint16_t *p = s_cur + (size_t)(yy - s_cur_y0) * DISP_FB_W + x;
+        uint16_t *p = s_cur + (size_t)(yy - s_cur_y0) * s_cur_w + x;
         for (int col = 0; col < w; col++) p[col] = color;
     }
 }
 
 void display_clear(uint16_t color)
 {
-    display_fill_rect(0, 0, DISP_FB_W, DISP_FB_H, color);
+    display_fill_rect(0, 0, s_cur_w, s_cur_frame_h, color);
 }
 
 void display_hline(int x, int y, int w, uint16_t color)

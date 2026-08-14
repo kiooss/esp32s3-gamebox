@@ -48,7 +48,7 @@ ROM 说明：商业 NES/GB/GBC/SNES/Genesis ROM 都是版权物，**本仓库不
 | `main/display.c` | ST7789 显示层。条带流式推屏 + 核 1 推屏任务，对上层只暴露「按条带填像素」 |
 | `main/nes_emu.c` | 适配层。把 nofrendo 的 8 位调色板画面逐条带转成 RGB565 推屏 |
 | `main/gbc_emu.c` | GB/GBC 适配层。把 160×144 大端 RGB565 等比放大到 240×216，并接入公共输入/音频 |
-| `main/genesis_emu.c` | retro-go Gwenesis 单核宿主层。320×241 索引帧转 RGB565，并混合 YM2612/PSG 音频 |
+| `main/genesis_emu.c` | retro-go Gwenesis 单核宿主层。320×241 索引帧以原生 320×224 送屏，并混合 YM2612/PSG 音频 |
 | `roms/` | 本地游戏库；`.nes/.gb/.gbc/.sfc/.smc/.md/.bin` 会逐条压缩进 ROM 分区镜像，不入库 |
 | `main/roms/` | 内置 ROM（公有领域测试 ROM） |
 | `components/nofrendo/` | NES 模拟器核心，取自 [retro-go](https://github.com/ducalex/retro-go)，**未改动源码** |
@@ -73,8 +73,10 @@ NES 输出 256×240，裁掉上下各 8 行 overscan 得 256×224。画布是 **
 永久消失（超过 8 精灵/扫描线的那些会彻底看不见）。而且拉满 320 的 PAR 是 1.25，
 偏宽 9%，宽高比反而更差。
 
-画布**只覆盖这块 288×224 的画面区**，不是整屏（见 `display.h` 的 `DISP_FB_W/H`）。
-黑边（左右各 16 列、上下各 8 行）由 `display_init()` 开机时清一次、之后再不碰。
+NES、SNES、菜单的默认画布**只覆盖这块 288×224 的画面区**，不是整屏（见
+`display.h` 的 `DISP_FB_W/H`）。黑边（左右各 16 列、上下各 8 行）由
+`display_init()` 开机时清一次、之后再不碰。Genesis 则通过 `display_stream_sized()`
+单独使用 **320×224**：H40 模式逐像素原生显示，H32 模式 256 像素内容居中，均不做横向缩放。
 
 GB/GBC 原生输出是 160×144 方形像素，在同一块 288×224 画布内按 3:2 等比放大为
 240×216，左右各留 24 列、上下各留 4 行。两块源帧放 PSRAM；条带 DMA 缓冲仍在
@@ -83,7 +85,7 @@ GB/GBC 原生输出是 160×144 方形像素，在同一块 288×224 画布内�
 ### 显示层为什么没有帧缓冲
 
 288×224 的 RGB565 是 126 KB，双缓冲要 252 KB，内部 DMA 内存装不下。所以
-`display.c` 只留两块 288×32 的条带缓冲（各 18 KB），核 1 一边把第 N+1 条转换进一块、
+`display.c` 只留两块最大 320×32 的条带缓冲（各 20 KB），核 1 一边把第 N+1 条转换进一块、
 一边 DMA 推第 N 条。整块画布由调用方的 `disp_strip_fn` 回调按条带现算，不落地。
 
 **双缓冲没有消失，只是下移到了 8 位的 NES vidbuf 那一层**（每块 64 KB，比 RGB565

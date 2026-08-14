@@ -59,19 +59,20 @@ idf.py flash-roms                                          # 只在加/删顶层
 
 这是整个项目最要紧的一件事，改显示或性能相关代码前必须先理解：
 
-- **没有常驻帧缓冲**。画布 288×224 的 RGB565 是 126 KB，双缓冲 252 KB，内部 DMA 内存装不下。
-- `display.c` 只留两块 288×32 的条带缓冲（各 18 KB），核 1 上的 `blit_task` 一边把第 N+1 条
+- **没有常驻帧缓冲**。默认画布 288×224 的 RGB565 是 126 KB，双缓冲 252 KB，内部 DMA 内存装不下。
+- `display.c` 只留两块最大 320×32 的条带缓冲（各 20 KB），核 1 上的 `blit_task` 一边把第 N+1 条
   转换进一块、一边 DMA 推第 N 条。整块画布由调用方的 `disp_strip_fn` 回调**按条带现算**，不落地。
 - **双缓冲下移到了 8 位的 NES `vidbuf` 那一层**（每块 64 KB，比 RGB565 便宜一半）：
   核 0 渲染一块的同时核 1 读另一块。`blit_frame`（nes_emu.c）提交完立刻 `nes_setvidbuf` 换块。
-- 上层唯一的接口是 `display_stream(fn, ctx)` / `display_stream_sync(...)`。
+- 默认接口是 `display_stream(fn, ctx)` / `display_stream_sync(...)`；Genesis 用
+  `display_stream_sized(..., 320, 224)` 提交原生宽度画布。
   `display_stream` 只在上一帧未推完时阻塞，天然节流。
 
 由此产生几条容易踩的约束：
 
 - ⚠️ **绘图原语（`display_clear` / `display_text` / `display_fill_rect` …）只能在
   `disp_strip_fn` 回调内部调用** —— 它们画的是「当前条带」，坐标仍相对整块画布，
-  条带外的部分自动丢弃。同一份绘制列表每帧被调用 `BAND_COUNT`（=7）次。
+  条带外的部分自动丢弃。同一份默认画布绘制列表每帧被调用 7 次。
   所以「清屏」这种一次性操作也得包成回调（见 `nes_emu.c` 的 `black_strip`）。
 - ⚠️ **条带缓冲不能放 PSRAM**：`spi_master` 用 `esp_ptr_dma_capable()` 判断，PSRAM 指针
   一律 false，驱动会每条带临时 malloc + memcpy，白绕一圈。同理 `vidbuf` 必须在内部 SRAM
@@ -82,11 +83,13 @@ idf.py flash-roms                                          # 只在加/删顶层
 - 条带越少越快：每条带约 122 µs 固定开销，串行叠加在总线时间上（实测数据见
   `display.c` 文件头和 `docs/hardware.md` §7）。
 
-### 画布 288×224 ≠ 面板 320×240
+### 默认画布 288×224，Genesis 画布 320×224，面板 320×240
 
 `DISP_FB_W/H` 是画布，`DISP_W/H` 是面板，画布居中，四周黑边由 `display_init()`
 开机清一次、之后再不碰。288 = 256×9/8，是为了修 NES 的 8:7 像素宽高比；不铺满 320
-是 SPI 带宽不够（会掉到 30 fps，而 NES 跳帧会让精灵闪烁永久消失）。完整推导见 `display.h`。
+是 SPI 带宽不够（会掉到 30 fps，而 NES 跳帧会让精灵闪烁永久消失）。Genesis 本身是
+320 像素宽且当前只提交部分帧，因此单独用 320×224，不改变其他模拟器的默认画布。
+完整推导见 `display.h`。
 
 ### ROM 来源：分区 mmap，编译期嵌入做回退
 
