@@ -319,6 +319,15 @@ esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
 {
     if (!rom || rom_size < 1024) return ESP_ERR_INVALID_ARG;
 
+    /* 菜单已经初始化过输入，这几次调用仍保持幂等。必须在耗时的缓冲分配和
+     * ROM 解析之前立刻记住确认时的面键，否则快速松开 X/Y 会在约百毫秒后
+     * 才轮询时漏掉，用户就得莫名其妙一直按到标题画面。 */
+    input_serial_init();
+    input_usb_init();
+    input_gamepad_init();
+    uint16_t launch_keys = input_serial_poll() | input_gamepad_poll() |
+                           input_usb_poll();
+
     uint32_t rom_crc = esp_crc32_le(0, rom, rom_size);
 
     printf("\nROM: %s  (%u 字节，SNES)\n", name ? name : "(unknown)",
@@ -378,23 +387,21 @@ esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
 
     S9xSetPlaybackRate(Settings.SoundPlaybackRate);
 
-    /* 菜单已经初始化过输入；这里再调仍是幂等的。提前到自动读档之前，才能让
-     * 用户在进入 SMW 时按住 X，非破坏性地试读双槽里的上一份存档。 */
-    input_serial_init();
-    input_usb_init();
-    input_gamepad_init();
-
     /* 目前只给 SMW 开即时存档。名称负责限制功能范围，ROM CRC 负责保证同名改版
-     * 或不同区域版本不会误加载；分区挂载失败不影响模拟器本身。 */
+     * 或不同区域版本不会误加载；分区挂载失败不影响模拟器本身。X/Y 两种入口
+     * 都不删除存档，避免一次误按就丢掉仍可取回的进度。 */
     bool save_enabled = strcmp(Memory.ROMName, "SUPER MARIOWORLD") == 0;
     bool resumed = false;
     bool recovered_previous = false;
+    bool cold_start_requested = false;
     if (save_enabled && snes_save_init(rom_crc) == ESP_OK) {
-        uint16_t launch_keys = input_serial_poll() | input_gamepad_poll() |
-                               input_usb_poll();
-        recovered_previous = (launch_keys & GAMEPAD_BIT_X) != 0;
-        resumed = recovered_previous ? snes_save_load_previous(rom_crc)
-                                     : snes_save_load_latest(rom_crc);
+        cold_start_requested = (launch_keys & GAMEPAD_BIT_Y) != 0;
+        recovered_previous = !cold_start_requested &&
+                             (launch_keys & GAMEPAD_BIT_X) != 0;
+        if (!cold_start_requested) {
+            resumed = recovered_previous ? snes_save_load_previous(rom_crc)
+                                         : snes_save_load_latest(rom_crc);
+        }
     }
 
     esp_err_t rgb_err = rgb_led_start_rainbow();
@@ -413,9 +420,12 @@ esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
            SNES_FRAMESKIP, SNES_FRAMESKIP);
     if (save_enabled) {
         printf("SMW 即时存档：同时长按 SELECT + START 1 秒保存；下次启动自动恢复。%s\n\n",
-               resumed ? (recovered_previous ? "本次按 X 尝试恢复了上一份状态。"
-                                             : "本次已恢复上次状态。")
-                       : "目前没有可恢复状态。");
+               cold_start_requested
+                   ? "本次按住 Y 跳过恢复并从头开始，原存档仍保留。"
+                   : (resumed ? (recovered_previous
+                                      ? "本次按 X 尝试恢复了上一份状态。"
+                                      : "本次已恢复上次状态。")
+                              : "目前没有可恢复状态。"));
     }
 
     const int fps = Memory.ROMFramesPerSecond ?: 60;
@@ -432,6 +442,9 @@ esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
     int64_t emu_us       = 0;
     int64_t blit_us      = 0;
     int64_t audio_us     = 0;
+    uint32_t pcm_peak    = 0;
+    uint32_t pcm_nonzero = 0;
+    uint32_t resume_zero_frames = 0;
     int64_t stat_t0      = esp_timer_get_time();
     int64_t next_frame   = stat_t0;
     int64_t save_hold_t0 = 0;
@@ -498,10 +511,50 @@ esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
          * 每帧调用并丢掉 PCM，否则 APU 与 SoundData 停在不同时间点，静音时
          * 保存出来的状态可能在恢复后一直无声。 */
         S9xMixSamples((int16_t *)s_soundbuf, s_audio_frames * 2);
+        uint32_t frame_peak = 0;
+        for (int i = 0; i < s_audio_frames * 2; i++) {
+            int sample = s_soundbuf[i];
+            uint32_t magnitude = (uint32_t)(sample < 0 ? -sample : sample);
+            if (magnitude > frame_peak) frame_peak = magnitude;
+        }
+        if (frame_peak > pcm_peak) pcm_peak = frame_peak;
+        if (frame_peak != 0) pcm_nonzero++;
         if (s_audio_ok && !audio_output_is_muted()) {
             audio_output_submit_stereo(s_soundbuf, s_audio_frames);
         }
         audio_us += esp_timer_get_time() - t2;
+
+        /* 旧固件静音时不推进混音器，两个实物存档槽都出现过这种状态：APU
+         * 声称仍有活动声道，但 PCM 在短暂残音后永久为零。SoundData 与 SPC700
+         * 的执行现场已经互相矛盾，重算音量或重启声道都只能响一两帧，无法
+         * 无损修复即时位置。
+         *
+         * 连续两秒确认后冷重启 SNES 核心。S9xReset() 会清 CPU/PPU/APU 和
+         * 工作 RAM，但故意不清 Memory.SRAM，所以仍能保留即时存档里最近一次
+         * 游戏内保存的地图进度；代价是回到标题画面，丢失当前关卡的瞬时位置。
+         * 两个 FAT 存档文件不删除，用户仍可用旧固件取回原始状态。 */
+        if (resumed && frame_peak == 0 && APU.KeyedChannels != 0) {
+            resume_zero_frames++;
+        } else {
+            resume_zero_frames = 0;
+        }
+        if (resumed && resume_zero_frames >= (uint32_t)(fps * 2)) {
+            ESP_LOGW(TAG,
+                     "即时存档音频状态已损坏（活动声道=%02x，连续%u帧PCM为零）；"
+                     "保留SRAM进度并冷启动游戏",
+                     APU.KeyedChannels, (unsigned)resume_zero_frames);
+            S9xReset();
+            S9xSetPlaybackRate(Settings.SoundPlaybackRate);
+            memset(s_soundbuf, 0, SNES_AUDIO_MAX_FRAMES * 2 * sizeof(int16_t));
+            resumed = false;
+            resume_zero_frames = 0;
+            skip_frames = 0;
+            next_frame = stat_t0 = esp_timer_get_time();
+            emu_frames = drawn_frames = 0;
+            emu_us = blit_us = audio_us = 0;
+            pcm_peak = pcm_nonzero = 0;
+            continue;
+        }
 
         skip_frames = (skip_frames == 0) ? SNES_FRAMESKIP : skip_frames - 1;
 
@@ -522,16 +575,19 @@ esp_err_t snes_emu_run(const uint8_t *rom, size_t rom_size, const char *name)
             int emu_fps10  = (int)(emu_frames * 10000000LL / (now - stat_t0));
             int draw_fps10 = (int)(drawn_frames * 10000000LL / (now - stat_t0));
             printf("SNES 模拟 %d.%d fps / 推屏 %d.%d fps  "
-                   "(模拟 %.1f + 拷贝 %.1f + 音频 %.1f ms/帧，CPU 余量 %d%%)\n",
+                   "(模拟 %.1f + 拷贝 %.1f + 音频 %.1f ms/帧，CPU 余量 %d%%，"
+                   "PCM峰值 %u，非零帧 %u/%d)\n",
                    emu_fps10 / 10, emu_fps10 % 10,
                    draw_fps10 / 10, draw_fps10 % 10,
                    (float)emu_us / 1000.0f / emu_frames,
                    (float)blit_us / 1000.0f / emu_frames,
                    (float)audio_us / 1000.0f / emu_frames,
                    100 - (int)((emu_us + blit_us + audio_us) * 100 /
-                               (now - stat_t0)));
+                               (now - stat_t0)),
+                   (unsigned)pcm_peak, (unsigned)pcm_nonzero, emu_frames);
             emu_frames = drawn_frames = 0;
             emu_us = blit_us = audio_us = 0;
+            pcm_peak = pcm_nonzero = 0;
             stat_t0 = now;
         }
     }
