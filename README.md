@@ -21,7 +21,8 @@ ESP32-S3-DevKitC-1 兼容板（N16R8）+ ST7789 SPI 屏（240×320，横屏 320�
 - [x] 移植 GB/GBC 模拟器核心（gnuboy）并接入同一套菜单、手柄、显示和音频
 - [x] 串口键盘当手柄（临时方案）→ `main/input_serial.c`
 - [x] JoyStick Shield 手柄 → `main/input_gamepad.c`（摇杆 + 四个面键 + SELECT/START）
-- [x] USB HID 手柄 → `main/input_usb.c`（通用描述符解析，优先支持 Raspberry Pi/RetroPie 复古手柄）
+- [~] USB HID 手柄 → `main/input_usb.c`（软件已接入；当前开发板 Root Port Reset 失败，
+      实机验收暂停，见 [`docs/usb-hid-investigation-2026-08-14.md`](docs/usb-hid-investigation-2026-08-14.md)）
 - [x] MAX98357 I2S 游戏音频
 - [~] 移植 SNES 模拟器核心（snes9x 2005）→ `components/snes9x/`。能跑但**达不到
       可玩帧率**：SMW 45/60 fps、Mario Kart 50/60 fps，大量热数据和渲染中间结果
@@ -205,6 +206,11 @@ idf.py -p /dev/cu.usbserial-A5069RR4 monitor
 Button 2/4 → A，Button 9 → SELECT，Button 10 → START。首次接入会在串口打印
 VID/PID、解析结果和前 40 次原始报告，便于识别换芯片的手柄批次。
 开机摇杆诊断页也接受 USB 手柄 A 或串口 `K/Z` 退出，不要求保留飞线手柄。
+
+> **当前实机状态（2026-08-14）**：这块开发板能检测到 USB 设备接入，但持续报
+> `HUB: Root port reset failed`，尚未通过 USB 手柄验收。已暂停继续排查；详细实验、
+> 已排除项和恢复入口见
+> [`docs/usb-hid-investigation-2026-08-14.md`](docs/usb-hid-investigation-2026-08-14.md)。
 
 **限制**：串口只有「按下」没有「松开」事件，所以每次按键让按钮保持 250ms
 （`input_serial.c` 的 `HOLD_MS`），长按靠终端的按键重复维持。因此：

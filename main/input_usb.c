@@ -94,6 +94,7 @@ static atomic_bool s_connected = ATOMIC_VAR_INIT(false);
 static QueueHandle_t s_device_events;
 static hid_host_device_handle_t s_device;
 static hid_layout_t s_layout;
+static bool s_dragonrise_fixed;
 static bool s_started;
 static uint16_t s_vid, s_pid;
 static uint8_t s_last_raw[USB_REPORT_MAX];
@@ -305,8 +306,40 @@ static void decode_axis(const hid_field_t *f, const uint8_t *data, size_t len,
     if (v > f->logical_max - span / 3) *state |= high_bit;
 }
 
+/* 这块 0079:0006 实物在 ESP-IDF 5.4 上能送 8 字节中断报告，但读取
+ * Report Descriptor 的控制传输会超时。不能因为描述符拿不到就丢掉已经收到的
+ * 输入，所以只对这个实测 VID/PID 加回退；其他换芯片批次仍走通用描述符解析。
+ *
+ * 实测静止值：7F 7F 00 80 80 0F 00 00
+ *   byte 0/1：方向 X/Y（00 / 7F / FF）
+ *   byte 5 高四位：HID Button 1~4
+ *   byte 6：HID Button 5~12，其中 bit4/5 是 Button 9/10
+ */
+static bool decode_dragonrise_0079_0006(const uint8_t *data, size_t len,
+                                        uint8_t *state)
+{
+    if (!data || len != 8) return false;
+
+    uint8_t out = 0;
+    if (data[0] < 0x40) out |= GAMEPAD_BIT_LEFT;
+    if (data[0] > 0xBF) out |= GAMEPAD_BIT_RIGHT;
+    if (data[1] < 0x40) out |= GAMEPAD_BIT_UP;
+    if (data[1] > 0xBF) out |= GAMEPAD_BIT_DOWN;
+
+    /* 延续通用映射：Button 1/3 -> B，2/4 -> A。 */
+    if (data[5] & 0x50) out |= GAMEPAD_BIT_B;
+    if (data[5] & 0xA0) out |= GAMEPAD_BIT_A;
+    if (data[6] & 0x10) out |= GAMEPAD_BIT_SELECT;
+    if (data[6] & 0x20) out |= GAMEPAD_BIT_START;
+
+    *state = out;
+    return true;
+}
+
 static bool decode_report(const uint8_t *data, size_t len, uint8_t *state)
 {
+    if (s_dragonrise_fixed)
+        return decode_dragonrise_0079_0006(data, len, state);
     if (!s_layout.valid || !data || len == 0) return false;
     const hid_candidate_t *r = &s_layout.report;
     if (s_layout.has_report_id) {
@@ -384,6 +417,7 @@ static void interface_callback(hid_host_device_handle_t handle,
         atomic_store_explicit(&s_state, 0, memory_order_relaxed);
         atomic_store_explicit(&s_connected, false, memory_order_relaxed);
         memset(&s_layout, 0, sizeof(s_layout));
+        s_dragonrise_fixed = false;
         ESP_LOGI(TAG, "USB 手柄已拔出");
         esp_err_t err = hid_host_device_close(handle);
         if (err != ESP_OK) ESP_LOGW(TAG, "关闭 HID 接口失败：%s", esp_err_to_name(err));
@@ -423,11 +457,21 @@ static void open_device(hid_host_device_handle_t handle)
     } else {
         s_vid = s_pid = 0;
     }
-    size_t desc_len = 0;
-    uint8_t *desc = hid_host_get_report_descriptor(handle, &desc_len);
     memset(&s_layout, 0, sizeof(s_layout));
-    bool parsed = desc && parse_report_descriptor(desc, desc_len, &s_layout);
-    if (parsed) {
+    s_dragonrise_fixed = s_vid == 0x0079 && s_pid == 0x0006;
+    size_t desc_len = 0;
+    bool parsed = false;
+    if (!s_dragonrise_fixed) {
+        uint8_t *desc = hid_host_get_report_descriptor(handle, &desc_len);
+        parsed = desc && parse_report_descriptor(desc, desc_len, &s_layout);
+    }
+    if (s_dragonrise_fixed) {
+        /* 这款实物的描述符控制传输固定超时；既然 VID/PID 和报告格式都已
+         * 实测确认，就不要先等一次必败的控制请求再启用回退。 */
+        ESP_LOGI(TAG,
+                 "USB 手柄 %04X:%04X 就绪：使用实测 8 字节固定映射",
+                 s_vid, s_pid);
+    } else if (parsed) {
         const hid_candidate_t *r = &s_layout.report;
         ESP_LOGI(TAG,
                  "USB 手柄 %04X:%04X 就绪：报告ID=%u，%u bit，方向=%s%s%s，按键=%u",
