@@ -2,9 +2,9 @@
 
 ESP32-S3-DevKitC-1 兼容板（N16R8）+ ST7789 SPI 屏（240×320，横屏 320×240）。
 
-**目标**：在这块板上运行 NES、Game Boy 和 Game Boy Color 游戏。
+**目标**：在这块板上运行 NES、Game Boy、Game Boy Color、SNES 和 Genesis 游戏。
 
-硬件详情见 [`docs/hardware.md`](docs/hardware.md)；Flash、内部 SRAM、PSRAM 和三种
+硬件详情见 [`docs/hardware.md`](docs/hardware.md)；Flash、内部 SRAM、PSRAM 和各条
 模拟器的完整分配账见 [`docs/memory.md`](docs/memory.md)。
 
 ## 路线图
@@ -24,15 +24,20 @@ ESP32-S3-DevKitC-1 兼容板（N16R8）+ ST7789 SPI 屏（240×320，横屏 320�
 - [~] USB HID 手柄 → `main/input_usb.c`（软件已接入；当前开发板 Root Port Reset 失败，
       实机验收暂停，见 [`docs/usb-hid-investigation-2026-08-14.md`](docs/usb-hid-investigation-2026-08-14.md)）
 - [x] MAX98357 I2S 游戏音频
+- [x] 移植 Genesis / Mega Drive 模拟器核心（retro-go Gwenesis）：按 retro-go 的
+      单核逐扫描线顺序运行 68000、Z80、VDP、YM2612 和 PSG，固定每 4 帧提交一张
+      画面。Sonic 实测轻场景约 58–59 fps，重场景约 38–49 fps，显示约 9–15 fps；
+      画面校验持续变化，I2S 无丢帧或写错。重场景因音频生成追不上实时播放会
+      间歇性断音；尝试逐扫描线声音和 `-Ofast` 后更慢，已恢复 cycle-accurate `-O2`
 - [~] 移植 SNES 模拟器核心（snes9x 2005）→ `components/snes9x/`。能跑但**达不到
       可玩帧率**：SMW 45/60 fps、Mario Kart 50/60 fps，大量热数据和渲染中间结果
       塞不进约 179 KB 的可用内部 SRAM。另外 Super FX / SA-1 / S-DD1 没有实现，
       这类卡带会黑屏。详见 [`components/snes9x/README.gamebox.md`](components/snes9x/README.gamebox.md)
 - [x] SMW 即时存档：SELECT + START 长按 1 秒，RST 后启动同一 ROM 自动恢复；
       960 KiB FAT + wear levelling，双槽交替写和 CRC 防断电损坏
-- [x] ROM 分区 14 MiB；当前 25 款游戏逐条 Deflate 后镜像约 8.12 MiB
+- [x] 27 款游戏逐条 Deflate 后镜像约 10.61 MiB；ROM 分区 13 MiB
 
-ROM 说明：商业 NES/GB/GBC/SNES ROM 都是版权物，**本仓库不包含**，需由使用者自备。
+ROM 说明：商业 NES/GB/GBC/SNES/Genesis ROM 都是版权物，**本仓库不包含**，需由使用者自备。
 随仓库分发的三个 `.nes` 是 nofrendo 测试套件里的公有领域 homebrew，用于验证。
 
 ## 代码结构
@@ -43,10 +48,12 @@ ROM 说明：商业 NES/GB/GBC/SNES ROM 都是版权物，**本仓库不包含**
 | `main/display.c` | ST7789 显示层。条带流式推屏 + 核 1 推屏任务，对上层只暴露「按条带填像素」 |
 | `main/nes_emu.c` | 适配层。把 nofrendo 的 8 位调色板画面逐条带转成 RGB565 推屏 |
 | `main/gbc_emu.c` | GB/GBC 适配层。把 160×144 大端 RGB565 等比放大到 240×216，并接入公共输入/音频 |
-| `roms/` | 本地游戏库；`.nes/.gb/.gbc/.sfc/.smc` 会逐条压缩进 ROM 分区镜像，不入库 |
+| `main/genesis_emu.c` | retro-go Gwenesis 单核宿主层。320×241 索引帧转 RGB565，并混合 YM2612/PSG 音频 |
+| `roms/` | 本地游戏库；`.nes/.gb/.gbc/.sfc/.smc/.md/.bin` 会逐条压缩进 ROM 分区镜像，不入库 |
 | `main/roms/` | 内置 ROM（公有领域测试 ROM） |
 | `components/nofrendo/` | NES 模拟器核心，取自 [retro-go](https://github.com/ducalex/retro-go)，**未改动源码** |
 | `components/gnuboy/` | GB/GBC 模拟器核心，取自 Retro-Go；宿主适配放在 `main/` |
+| `components/gwenesis/` | Genesis 核心，取自 retro-go 的 Gwenesis 组件；Gamebox 只适配构建和 M68K RAM 分配时机 |
 | `components/nofrendo/rg_system.h` | 唯一的粘合层：nofrendo 只需要日志 / CRC32 / IRAM_ATTR 三样东西 |
 
 ### 画面怎么放
@@ -143,7 +150,7 @@ malloc 一块内部缓冲再 memcpy —— 数据最后照样落在内部 RAM，
 
 ### 换 ROM
 
-日常游戏库放在顶层 `roms/`：支持 `.nes`、`.gb`、`.gbc`、`.sfc`、`.smc`。运行
+日常游戏库放在顶层 `roms/`：支持 `.nes`、`.gb`、`.gbc`、`.sfc`、`.smc`、`.md`、`.bin`。运行
 `idf.py build` 会把每个游戏独立压成 raw Deflate 并生成 `build/roms.bin`，再用
 `idf.py flash-roms` 单独烧入。开机菜单只读取目录；确认游戏后才把选中的一份解到
 PSRAM，其他游戏不占运行内存。换游戏仍按板子 RST 重启，避免在模拟器之间留下状态。
@@ -160,12 +167,12 @@ PSRAM，其他游戏不占运行内存。换游戏仍按板子 RST 重启，避�
 JoyStick Shield，接线见「接线」一节。飞线手柄、USB 手柄、串口键盘三路输入
 **并存**（按位或），串口留着当调试后路。
 
-| 物理位置 | Shield 丝印 | SNES | NES / GB / GBC |
-|---|---|---|---|
-| 上方大键 | A | X | 无 |
-| 左方大键 | D | Y | 无 |
-| 右方大键 | B | A | A |
-| 下方大键 | C | B | B（选单中切换声音） |
+| 物理位置 | Shield 丝印 | SNES | Genesis | NES / GB / GBC |
+|---|---|---|---|---|
+| 上方大键 | A | X | 无 | 无 |
+| 左方大键 | D | Y | C | 无 |
+| 右方大键 | B | A | B | A |
+| 下方大键 | C | B | A | B（选单中切换声音） |
 | 左侧小键 | F | SELECT | SELECT |
 | 右侧小键 | E | START | START |
 | 摇杆 | — | 上下左右 | 上下左右 |
@@ -372,8 +379,14 @@ NES 画面对不上的组合），以及 `display.c` 的 `BAND_LINES`（最好�
 `components/snes9x/src/LICENSE` 是 Snes9x 自己的许可证，不是 GPL，
 **明确禁止商业分发**。
 
-由于链接了 GPL 代码，**整个固件在分发时受 GPL v2 约束**。自己玩没影响，
-但如果要公开发布二进制或仓库，需要一并提供源码。而 snes9x 那条又叠加了
+`components/gwenesis/` 取自 [retro-go](https://github.com/ducalex/retro-go/tree/master/gwenesis/components/gwenesis)，
+基线和 Gamebox 的两处必要适配记录在该目录 `README.gamebox.md`。保留了上游
+`LICENSE` 和各源码文件头。需要注意：目录里的 `LICENSE` 是 AGPL v3，
+而各 Gwenesis 源码文件头写的是 GPL v3 or later；这是上游已有的不一致，公开分发前应
+先向上游确认准确授权，不能自行选择较宽松的一项。
+
+由于 Gwenesis 与其他核心一起静态链接，分发完整固件时必须同时满足各组件许可证；
+如果公开发布二进制，需要提供相应完整源码。而 snes9x 那条又叠加了
 禁止商业用途 —— 两者取交集，实际上这个固件只能非商业地分发。
 
 `main/` 下的代码是本项目自己写的。ROM 文件的版权归各自权利人所有。

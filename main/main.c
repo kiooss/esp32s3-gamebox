@@ -1,5 +1,5 @@
 /*
- * 在 ESP32-S3 + ST7789（240x320）上运行 NES / GB / GBC
+ * 在 ESP32-S3 + ST7789（240x320）上运行 NES / GB / GBC / SNES / Genesis
  *
  * 流程：打印板级信息 -> 初始化屏 -> 开机选游戏 -> 启动模拟器（不返回）
  *
@@ -20,6 +20,7 @@
 #include "nes_emu.h"
 #include "gbc_emu.h"
 #include "snes_emu.h"
+#include "genesis_emu.h"
 #include "rom_menu.h"
 
 static const char *TAG = "main";
@@ -137,9 +138,10 @@ void app_main(void)
     rom_menu_pick(&entry, &launch_keys);
 
     rom_system_t system = entry ? entry->system : ROM_SYSTEM_NES;
-    esp_err_t run_err = system == ROM_SYSTEM_NES  ? nes_emu_run(entry)
-                      : system == ROM_SYSTEM_SNES ? snes_emu_run(entry, launch_keys)
-                                                  : gbc_emu_run(entry);
+    esp_err_t run_err = system == ROM_SYSTEM_NES     ? nes_emu_run(entry)
+                      : system == ROM_SYSTEM_SNES    ? snes_emu_run(entry, launch_keys)
+                      : system == ROM_SYSTEM_GENESIS ? genesis_emu_run(entry)
+                                                     : gbc_emu_run(entry);
     if (run_err != ESP_OK) {
         ESP_LOGE(TAG, "模拟器启动失败");
     }

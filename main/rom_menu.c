@@ -73,6 +73,7 @@ typedef struct {
 static const char *system_name(rom_system_t system)
 {
     if (system == ROM_SYSTEM_SNES) return "SNES";
+    if (system == ROM_SYSTEM_GENESIS) return "MD  ";
     if (system == ROM_SYSTEM_GBC) return "GBC ";
     if (system == ROM_SYSTEM_GB) return "GB  ";
     return "NES ";

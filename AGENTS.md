@@ -3,7 +3,7 @@
 本仓库给编码 agent 的说明。`CLAUDE.md` 只是 `@AGENTS.md` 一行引用，
 所以**改这个文件就够了**，别把内容抄成两份。
 
-ESP32-S3-DevKitC-1（N16R8）+ ST7789 SPI 屏上跑 NES 模拟器（nofrendo）。
+ESP32-S3-DevKitC-1（N16R8）+ ST7789 SPI 屏上跑多平台模拟器。
 ESP-IDF v5.4，纯 C，无测试套件 —— 验证靠烧板子 + 看串口输出。
 
 代码注释和提交信息都用中文，重点写「为什么这么做」而不是「做了什么」。
@@ -15,13 +15,13 @@ ESP-IDF v5.4，纯 C，无测试套件 —— 验证靠烧板子 + 看串口输�
 . ~/esp/esp-idf/export.sh                                  # 每个新终端都要跑一次
 idf.py build
 idf.py -p /dev/cu.usbserial-A5069RR4 flash monitor         # 退出 monitor: Ctrl+]
-idf.py flash-roms                                          # 只在加/删 roms/*.nes 后跑
+idf.py flash-roms                                          # 只在加/删顶层 roms/ 后跑
 ```
 
 - 端口是板载 FT232R（丝印 `COM` 的 Type-C 口）。`A5069RR4` 是这颗芯片的序列号，
   换板子会变，用 `ls /dev/cu.usbserial-*` 确认。
 - `flash-roms` 是顶层 `CMakeLists.txt` 注册的自定义 target，**故意不挂在 `idf.py flash` 上**：
-  ROM 分区 14 MB，当前 25-ROM Deflate 镜像约 8.12 MiB，烧一次仍较久，而它几乎从不变。
+  ROM 分区 13 MB，当前 27-ROM Deflate 镜像约 10.61 MiB，烧一次仍较久，而它几乎从不变。
   烧录时间只跟镜像实际字节数走（`esptool write_flash` 写的是文件），跟分区开多大无关。
 - `sdkconfig` 不入库，由 `sdkconfig.defaults` 生成。要固化配置就改 `.defaults`，
   别改 `sdkconfig`（会被覆盖）。里面每一条都有理由（240 MHz CPU、1000 Hz tick、
@@ -35,7 +35,7 @@ idf.py flash-roms                                          # 只在加/删 roms/
 `main/CMakeLists.txt` 的 `EMBED_FILES` 引用了 5 个版权 ROM（`main/roms/{smb,tetris,contra,pacman,drmario}.nes`），
 它们在 `.gitignore` 里。自备文件放进去，或者把 `main/nes_emu.c` 顶部的 `ROM_CHOICE`
 改成 5/6/7（随仓库分发的公有领域测试 ROM）并从 `EMBED_FILES` 删掉缺失的行。
-顶层 `roms/`（给 `flash-roms` 用的 21 个游戏）同样不入库。
+顶层 `roms/`（给 `flash-roms` 用的本地游戏）同样不入库。
 
 ### 板上验证的诊断开关
 
@@ -53,7 +53,7 @@ idf.py flash-roms                                          # 只在加/删 roms/
 
 ## 架构
 
-启动链：`app_main`（main.c）→ `nes_emu_prealloc` → `display_init` → `rom_menu_pick` → `nes_emu_run`（不返回）。
+启动链：`app_main`（main.c）→ `nes_emu_prealloc` → `display_init` → `rom_menu_pick` → 对应模拟器（不返回）。
 
 ### 双核分工与「条带流式推屏」
 
@@ -90,9 +90,9 @@ idf.py flash-roms                                          # 只在加/删 roms/
 
 ### ROM 来源：分区 mmap，编译期嵌入做回退
 
-- `roms/*.{nes,gb,gbc,sfc,smc}` → `tools/pack_roms.py` 打成自定义镜像
+- `roms/*.{nes,gb,gbc,sfc,smc,md,bin}` → `tools/pack_roms.py` 打成自定义镜像
   （magic + 定长目录表 + 每个 ROM 独立 raw Deflate）
-  → 烧进 `partitions.csv` 里 offset `0x110000` 的 14 MB `roms` 分区（子类型 0x40）。
+  → 烧进 `partitions.csv` 里 offset `0x210000` 的 13 MB `roms` 分区（子类型 0x40）。
   分区容量由 `pack_roms.py` 的 `roms_partition_size()` 现读 `partitions.csv`，
   改分区大小不用再同步脚本（以前写死 8 MB，扩容时忘了改会在打包这步炸）。
 - `rom_store.c` 一次 `esp_partition_mmap` 整个分区，菜单只读目录；确认后只把选中的
@@ -119,7 +119,8 @@ idf.py flash-roms                                          # 只在加/删 roms/
 `RETRO_GO` 宏必须是 `PUBLIC`，否则 main 和组件对 `IRAM_ATTR` 的取值会打架。
 `-O3` 是性能关键。
 
-⚠️ **GPL v2**：链接了 GPL 代码，整个固件分发时受 GPL v2 约束。
+⚠️ Gwenesis 的目录 `LICENSE` 是 AGPL v3、源码头却写 GPL v3+，上游元数据不一致；
+Snes9x 另有非商业分发限制。发布完整固件前必须先澄清并逐项满足组件许可。
 
 ## 改动时要同步的跨文件不变量
 
@@ -150,5 +151,5 @@ idf.py flash-roms                                          # 只在加/删 roms/
 
 - `README.md` —— 路线图、接线表、操作说明、调色板选择、排障记录
 - `docs/hardware.md` —— 板卡细节、引脚、ST7789 三个坑、逐次优化的实测数据（§7）
-- `docs/memory.md` —— Flash、内部 SRAM、PSRAM 的统一定义和三种模拟器分配账
+- `docs/memory.md` —— Flash、内部 SRAM、PSRAM 的统一定义和各模拟器分配账
 - 已知问题：屏没引出 TE 信号，推屏和面板扫描无法同步，画面剧变时有轻微撕裂

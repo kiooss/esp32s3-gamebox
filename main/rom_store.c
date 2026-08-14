@@ -45,6 +45,7 @@ static const char *TAG = "romstore";
 #define SNES_ROM_MIN_SIZE 0x20000
 #define SNES_LOROM_HEADER 0x7FC0
 #define SNES_HIROM_HEADER 0xFFC0
+#define GENESIS_ROM_MIN_SIZE 0x200
 
 /* SNES 没有 magic。业界通行的判据是内部头里那对校验和：
  * checksum ^ complement 必须等于 0xFFFF。再要求标题是可打印 ASCII，
@@ -74,6 +75,11 @@ static bool rom_header_ok(rom_system_t system, const uint8_t *rom, size_t size)
         return snes_header_ok(rom, size, SNES_LOROM_HEADER) ||
                snes_header_ok(rom, size, SNES_HIROM_HEADER);
     }
+    if (system == ROM_SYSTEM_GENESIS) {
+        /* 标准卡带头 0x100 起始处是 `SEGA ...`。SMD 交错格式不在打包阶段支持，
+         * 避免把桌面模拟器能猜出来的任意 .bin 误烧进设备。 */
+        return size >= GENESIS_ROM_MIN_SIZE && memcmp(rom + 0x100, "SEGA", 4) == 0;
+    }
     return size >= 0x150 && memcmp(rom + 0x104, gb_logo_head, 4) == 0;
 }
 
@@ -101,7 +107,7 @@ int rom_store_init(void)
         return 0;
     }
 
-    /* 整个分区映射进来。ESP32-S3 的 flash mmap 窗口足够容纳当前 14 MB 分区。
+    /* 整个分区映射进来。ESP32-S3 的 flash mmap 窗口足够容纳当前 13 MB 分区。
      * 不解除映射：ROM 指针要在整个运行期间一直有效。 */
     const void *base = NULL;
     esp_partition_mmap_handle_t handle;
@@ -154,11 +160,13 @@ int rom_store_init(void)
 
         /* 每一条都验：数据落在分区内、不和目录表重叠、大小像个 ROM。
          * off + size 用 64 位算，避免 32 位回绕把越界算成合法。 */
-        size_t min_size = system == ROM_SYSTEM_NES  ? NES_ROM_MIN_SIZE
-                        : system == ROM_SYSTEM_SNES ? SNES_ROM_MIN_SIZE
-                                                    : GB_ROM_MIN_SIZE;
+        size_t min_size = system == ROM_SYSTEM_NES     ? NES_ROM_MIN_SIZE
+                        : system == ROM_SYSTEM_SNES    ? SNES_ROM_MIN_SIZE
+                        : system == ROM_SYSTEM_GENESIS ? GENESIS_ROM_MIN_SIZE
+                                                       : GB_ROM_MIN_SIZE;
         if ((system != ROM_SYSTEM_NES && system != ROM_SYSTEM_GB &&
-             system != ROM_SYSTEM_GBC && system != ROM_SYSTEM_SNES) ||
+             system != ROM_SYSTEM_GBC && system != ROM_SYSTEM_SNES &&
+             system != ROM_SYSTEM_GENESIS) ||
             (codec != ROM_CODEC_RAW && codec != ROM_CODEC_DEFLATE) ||
             (uint64_t)off + stored_size > part->size || off < dir_end ||
             stored_size == 0 || raw_size < min_size || raw_size > ROM_MAX_SIZE ||

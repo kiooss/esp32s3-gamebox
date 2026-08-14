@@ -29,6 +29,7 @@ typedef enum {
     ROM_SYSTEM_GB   = 2,
     ROM_SYSTEM_GBC  = 3,
     ROM_SYSTEM_SNES = 4,
+    ROM_SYSTEM_GENESIS = 5,
 } rom_system_t;
 
 typedef enum {

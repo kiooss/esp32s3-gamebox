@@ -1,7 +1,7 @@
 # 内存与 Flash 布局
 
 本文统一说明本项目里容易混淆的三种 “SRAM”、16 MB Flash 的用途，以及
-NES、GB/GBC、SNES 三条模拟路径各自把数据放在哪里。
+NES、GB/GBC、SNES、Genesis 各条模拟路径分别把数据放在哪里。
 
 除特别注明外，本文的 `KiB` / `MiB` 都按 1024 进位；串口日志为了简短仍打印 `KB`。
 
@@ -67,18 +67,20 @@ Flash 和 PSRAM 是两套独立资源。ROM 分区的 mmap 只消耗 Flash 地�
 |---|---:|---:|---|
 | NVS | `0x009000` | 24 KiB | ESP-IDF 预留的持久配置空间 |
 | PHY init | `0x00F000` | 4 KiB | ESP-IDF PHY 数据 |
-| factory app | `0x010000` | 1 MiB | 固件；六键 + 即时存档参考构建约 968 KiB，余约 79 KiB |
-| roms | `0x110000` | 14 MiB | 25 个 ROM；14.91 MiB 原始数据压成约 8.12 MiB |
+| factory app | `0x010000` | 2 MiB | 含 Gwenesis 的固件约 1.55 MiB，余约 457 KiB |
+| roms | `0x210000` | 13 MiB | 27 个 ROM；19.16 MiB 原始数据压成约 10.61 MiB |
 | snes_save | `0xF10000` | 960 KiB | SMW 即时存档，FAT + wear levelling |
 
 `roms` 分区止于 `0xF10000`，其后的 960 KiB 已全部分给 `snes_save`。ROM 镜像只在
 加、删或替换游戏时用 `idf.py flash-roms` 单独烧录，普通 `idf.py flash` 不更新它；
 普通烧固件会更新分区表，但不会主动擦除已有的存档分区。
 
-新镜像把每个游戏独立保存为 raw Deflate，菜单阶段只读 mmap 目录；NES、GB/GBC 在
+新镜像把每个游戏独立保存为 raw Deflate，菜单阶段只读 mmap 目录；NES、GB/GBC、Genesis 在
 确认后把选中的 ROM 解到 PSRAM，核心的 bank 指针长期引用这块缓冲。SNES 的装载流程
 还会就地改写映射区域，因此先释放 Snes9x 贪心申请的 6 MiB ROM 缓冲，再直接解压到
 带映射余量的最终缓冲；不能先解压一份再复制，否则 4 MiB 卡带会耗尽 8 MiB PSRAM。
+Genesis 的 68000 核会原地交换 ROM 字节序，因此即使某条 ROM 压缩后没有变小，也会
+强制复制到可写 PSRAM，绝不修改 flash mmap。
 
 SMW 单份未压缩即时状态固定为 365,120 字节（356.6 KiB）。存档层使用两个交替文件：
 写新槽期间保留上一槽，完整关闭文件、重新读取并校验 CRC 后才提交元数据。RST 或断电
@@ -105,7 +107,29 @@ SMW 单份未压缩即时状态固定为 365,120 字节（356.6 KiB）。存档�
 NES 适配层没有强制申请大块 PSRAM。nofrendo 自身若做大于 16 KiB 的普通 heap 分配，
 仍可能按全局策略落入 PSRAM，但 NES 的关键视频路径不依赖它。
 
-### 5.2 GB/GBC
+### 5.2 Genesis
+
+| 对象 | 大小 | 位置 | 原因 |
+|---|---:|---|---|
+| 68000 主 RAM | 64 KiB | 优先片内 SRAM | 指令执行时最热的随机访问区，最先申请 |
+| VDP VRAM | 64 KiB | 片内优先、PSRAM 回退 | 大块但访问较顺序，优先级低于主 RAM |
+| 两块 320×241 索引帧 | 约 2 × 75 KiB | PSRAM | 单核写一块、LCD 条带回调读另一块，不直接做 DMA |
+| 每帧调色板快照 | 2 × 512 B | 静态 RAM | LCD 异步读取时不受下一模拟帧 CRAM 改写影响 |
+| ROM | 当前 4 MiB | PSRAM | Gwenesis 会原地交换 16 位字节序 |
+| YM2612/PSG 状态与表 | 上游静态区 | 片内 SRAM | retro-go 原组件按单核热数据布局 |
+
+retro-go 原组件把 64 KiB M68K RAM 做成静态数组，会让开机时第二块 NES 缓冲分配
+失败；Gamebox 只把它改成选中 Genesis、释放 NES 预留内存后再动态申请，仍放片内。
+模拟部分沿用 retro-go 的单核逐扫描线顺序，固定每 4 帧生成并提交一张画面；CPU、IRQ
+和声音芯片仍在每个模拟帧运行。Sonic 实机轻场景约 58–59 fps，重场景约 38–49 fps，
+显示约 9–15 fps。落后时每帧主动让出 1 tick 后不再触发任务看门狗，I2S 连续
+3900 包无丢包或写错；画面抽样校验值持续变化，并已由用户确认画面能动。
+这里的“无丢包”只表示软件队列和 I2S 写入正常：重场景每个模拟帧要 23–27 ms，
+却只生成 16.7 ms PCM，持续产出小于播放消耗，所以 DMA 会饿空，实听表现为声音
+一卡一卡。测试过 Gwenesis 的逐扫描线声音模式和 `-Ofast`，重场景反而降到
+28–43 fps，已撤回；纯单核方案下保留当前断音，不用降采样率换取错误音高。
+
+### 5.3 GB/GBC
 
 | 对象 | 大小 | 位置 | 原因 |
 |---|---:|---|---|
@@ -117,7 +141,7 @@ NES 适配层没有强制申请大块 PSRAM。nofrendo 自身若做大于 16 KiB
 
 所以 GB/GBC 明确占用的 PSRAM 下限约为 90 KiB；实际值还要加卡带 RAM 和普通 heap。
 
-### 5.3 SNES，`SNES_MEM_PROFILE=0`
+### 5.4 SNES，`SNES_MEM_PROFILE=0`
 
 这是当前最依赖 PSRAM 的路径。下表列大块对象；不包含 FreeRTOS/驱动、allocator 元数据、
 小对象和大小随声音核心状态变化的缓冲。

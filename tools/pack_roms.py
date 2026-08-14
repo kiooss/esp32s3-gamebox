@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""把 roms/ 下的 NES / GB / GBC / SNES 游戏打包进 flash 的 roms 分区。
+"""把 roms/ 下的 NES / GB / GBC / SNES / Genesis 游戏打包进 roms 分区。
 
 镜像格式（小端，和 ESP32 一致）：
 
@@ -7,7 +7,7 @@
     偏移 8    count                      uint32，条目数
     偏移 12   目录项 x count，每项 64 字节：
                   name    char[40]       显示名，NUL 结尾
-                  system  uint32         1=NES, 2=GB, 3=GBC, 4=SNES
+                  system  uint32         1=NES, 2=GB, 3=GBC, 4=SNES, 5=Genesis
                   codec   uint32         0=原样，1=raw DEFLATE
                   offset  uint32         存储数据在**镜像**内的绝对偏移
                   stored  uint32         压缩后的存储字节数
@@ -45,14 +45,16 @@ SYSTEM_NES = 1
 SYSTEM_GB = 2
 SYSTEM_GBC = 3
 SYSTEM_SNES = 4
+SYSTEM_GENESIS = 5
 SYSTEM_NAMES = {
     SYSTEM_NES: "NES",
     SYSTEM_GB: "GB",
     SYSTEM_GBC: "GBC",
     SYSTEM_SNES: "SNES",
+    SYSTEM_GENESIS: "MD",
 }
 
-EXTENSIONS = (".nes", ".gb", ".gbc", ".sfc", ".smc")
+EXTENSIONS = (".nes", ".gb", ".gbc", ".sfc", ".smc", ".md", ".bin")
 
 # ROM 站惯例的标记：(U) (E) (Japan, USA) [!] [!p] (PRG0) 等等。
 # 显示名里不需要，剥掉。
@@ -118,6 +120,11 @@ def snes_ok(data):
     return None
 
 
+def genesis_ok(data):
+    """只接收标准线性卡带镜像；0x100 的 SEGA 头比扩展名可靠。"""
+    return len(data) >= 0x200 and data[0x100:0x104] == b"SEGA"
+
+
 def compress_rom(data):
     """返回 (codec, payload)。
 
@@ -180,6 +187,8 @@ def main():
         if ext in (".sfc", ".smc"):
             data = snes_strip_copier_header(data)
             system = snes_ok(data)
+        if ext in (".md", ".bin") and genesis_ok(data):
+            system = SYSTEM_GENESIS
         if system is None:
             print("  跳过（ROM 头无效）: %s" % os.path.basename(p))
             continue

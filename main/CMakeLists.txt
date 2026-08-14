@@ -1,12 +1,12 @@
 # 注意：一旦给 main 显式写了 REQUIRES，它就不再自动依赖全部组件了，
 # 所以 display.c / nes_emu.c 用到的驱动都得在这里列全。
 idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
-                            "gbc_emu.c" "snes_emu.c" "snes_save.c"
+                            "gbc_emu.c" "snes_emu.c" "snes_save.c" "genesis_emu.c"
                             "rgb_led.c" "audio_output.c"
                             "input_serial.c" "input_gamepad.c" "input_usb.c"
                             "rom_store.c" "rom_menu.c"
                        INCLUDE_DIRS "."
-                       REQUIRES nofrendo gnuboy snes9x
+                       REQUIRES nofrendo gnuboy snes9x gwenesis
                                 esp_partition  # roms 分区 mmap
                                 esp_rom        # ROM 内置 tinfl，解压逐条 Deflate ROM
                                 esp_lcd
@@ -29,8 +29,8 @@ idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
                        # （264 KB）固件只大了 500 字节。
                        #
                        # 所以体积上限是「固件本体 + 最大的那一个 ROM」，不是全部
-                       # ROM 之和。app 分区 1 MB，固件本体约 400 KB，单个 ROM 撑到
-                       # 500 KB 都没问题（NES 最大的卡也就 512 KB）。
+                       # ROM 之和。Genesis 加入后 app 分区已扩到 2 MB，嵌入 ROM
+                       # 仍只用作分区损坏时的 NES 回退路径。
                        EMBED_FILES "roms/smb.nes"
                                    "roms/tetris.nes"
                                    "roms/contra.nes"

@@ -1,11 +1,12 @@
 /*
  * MAX98357 I2S 音频输出
  *
- * NES 和 GB/GBC 共用的非阻塞宿主后端。nofrendo 没有音频回调，所以仍用
+ * 所有模拟器共用的非阻塞宿主后端。nofrendo 没有音频回调，所以仍用
  * --wrap=apu_emulate 接出 PCM；gnuboy 则直接调用 audio_output_submit_stereo()。
  *
- * 核 0 的模拟线程只生成采样并向队列复制约 1.6 KB，绝不等 I2S。消费任务阻塞
- * 在 DMA 写入上；即使喇叭或驱动异常，也不会把 60 fps 主循环一起卡住。
+ * 模拟线程只生成采样并向队列复制，绝不等 I2S。消费任务留在核 0 的低优先级；
+ * 核 1 同时承担 LCD 和 Genesis 声音，实机把 I2S 也迁过去会让推屏从 15 ms
+ * 恶化到 21 ms，并开始丢音频包。
  */
 
 #include <stdatomic.h>
