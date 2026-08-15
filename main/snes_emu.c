@@ -1,9 +1,10 @@
 /*
  * SNES（Snes9x 2005）适配层 —— 可行性验证版
  *
- * 为什么值得试：SNES 的可见区是 256x224，和 NES 裁掉 overscan 之后**一模一样**，
- * 所以横向仍是 9:8 扩展到 288、竖向 1:1，公共画布一个像素都不用改。
- * 参见 nes_emu.c 里同名的 GROUP_SRC/GROUP_DST。
+ * SNES 可见区是 256x224，和 NES 裁掉 overscan 之后**一模一样**。但和 NES
+ * 不同，SNES 不挂公共 288x224 画布——横向 256->320 正好是整数 5:4 扩展，
+ * 纵向 224->240（15:14，非整数比，最近邻取源行）走 display_stream_sized()
+ * 铺满整块 320x240 面板，和 GB/GBC、Genesis 同一套做法（见 snes_strip）。
  *
  * 和 NES/GB 那两层的差别（都是刻意的，为了先拿到帧率数据）：
  *
@@ -42,14 +43,14 @@
 
 static const char *TAG = "snes";
 
-/* 横向 9:8 扩展，和 nes_emu.c 完全同一套参数 —— SNES 可见区也是 256 宽。 */
-#define GROUP_SRC   8
-#define GROUP_DST   9
+/* 横向 256->320 是整数 5:4 扩展（4 个源像素一组变 5 个）。不用公共
+ * 288x224 画布——和 GB/GBC、Genesis 一样走 display_stream_sized() 铺满
+ * 整块面板；纵向 224->240 非整数比，运行时在 snes_strip 里最近邻取源行。 */
+#define GROUP_SRC   4
+#define GROUP_DST   5
 
-_Static_assert(DISP_FB_W == SNES_WIDTH / GROUP_SRC * GROUP_DST,
-               "画布宽度要等于 SNES 画面宽度做完 9:8 扩展的结果");
-_Static_assert(DISP_FB_H == SNES_HEIGHT,
-               "画布高度要和 SNES 可见行数一致");
+_Static_assert(DISP_W == SNES_WIDTH / GROUP_SRC * GROUP_DST,
+               "面板宽度要等于 SNES 画面宽度做完 5:4 扩展的结果");
 
 /* snes9x 的帧缓冲按 SNES_HEIGHT_EXTENDED(239) 行分配：少数游戏会切到
  * 239 行模式。画布只有 224 行，多出来的 15 行直接不画（先不处理，
@@ -103,34 +104,33 @@ static bool      s_audio_ok;
 static int       s_audio_frames; /* 每帧提交多少立体声帧，由卡带帧率决定 */
 static uint16_t  s_pad_state;    /* 每帧只轮询一次，核心回调读取这份快照 */
 
-/* 条带回调 —— 跑在核 1 上。做两件事：横向 9:8 扩展，以及小端转大端。
+/* 条带回调 —— 跑在核 1 上。做三件事：纵向最近邻选源行、横向 4:5 扩展、
+ * 小端转大端。
  *
  * snes9x 直接产出主机字节序（小端）的 RGB565，而本项目的帧缓冲存的是
  * 字节交换后的大端值（见 display.h 的 RGB565 宏）。所以这里每个像素都要
  * __builtin_bswap16 —— 在已经要逐像素搬运的循环里，这一条指令基本白送。
  *
- * 内循环按 8 个源像素一组展开，写 9 个（最后一个重复），和 nes_strip 同构。 */
+ * 纵向 224->240 不是整数比，每行按 retro-go 同样的 step 公式取源行
+ * （和 gbc_strip 同一套算法，没有插值）。横向内循环按 4 个源像素一组
+ * 展开，写 5 个（最后一个重复），和之前 8:9 版本同构，只是组更小。 */
 static void snes_strip(uint16_t *strip, int y0, int h, void *ctx)
 {
     const uint16_t *frame = ctx;
 
     for (int r = 0; r < h; r++) {
-        const uint16_t *src = frame + (size_t)(y0 + r) * SNES_WIDTH;
-        uint16_t       *dst = strip + (size_t)r * DISP_FB_W;
+        int src_y = (y0 + r) * SNES_HEIGHT / DISP_H;
+        const uint16_t *src = frame + (size_t)src_y * SNES_WIDTH;
+        uint16_t       *dst = strip + (size_t)r * DISP_W;
 
         for (int g = SNES_WIDTH / GROUP_SRC; g > 0; g--) {
             uint16_t c0 = __builtin_bswap16(src[0]);
             uint16_t c1 = __builtin_bswap16(src[1]);
             uint16_t c2 = __builtin_bswap16(src[2]);
             uint16_t c3 = __builtin_bswap16(src[3]);
-            uint16_t c4 = __builtin_bswap16(src[4]);
-            uint16_t c5 = __builtin_bswap16(src[5]);
-            uint16_t c6 = __builtin_bswap16(src[6]);
-            uint16_t c7 = __builtin_bswap16(src[7]);
 
             dst[0] = c0; dst[1] = c1; dst[2] = c2; dst[3] = c3;
-            dst[4] = c4; dst[5] = c5; dst[6] = c6; dst[7] = c7;
-            dst[8] = c7;                /* 复制点落在 8 像素图块边界上 */
+            dst[4] = c3;                /* 复制点落在 4 像素图块边界上 */
 
             src += GROUP_SRC;
             dst += GROUP_DST;
@@ -151,15 +151,18 @@ static void save_notice_strip(uint16_t *strip, int y0, int h, void *ctx)
     snes_strip(strip, y0, h, s_present);
 
     int text_w = (int)strlen(notice->text) * 6;
-    int x = (DISP_FB_W - text_w) / 2;
-    display_fill_rect(x - 8, 99, text_w + 16, 24, C_BLACK);
-    display_text(x, 107, notice->text, notice->color, 1);
+    int x = (DISP_W - text_w) / 2;
+    display_fill_rect(x - 8, 108, text_w + 16, 24, C_BLACK);
+    display_text(x, 116, notice->text, notice->color, 1);
 }
 
 static void show_save_notice(const char *text, uint16_t color)
 {
     save_notice_t notice = { .text = text, .color = color };
-    display_stream_sync(save_notice_strip, &notice);
+    /* snes_strip 现在按 DISP_W 铺画布——display_stream_sync 走的默认
+     * DISP_FB_W(288) 会和条带 stride 对不上，改用 sized + 手动等待。 */
+    display_stream_sized(save_notice_strip, &notice, DISP_W, DISP_H);
+    display_wait_idle();
 }
 
 static void black_strip(uint16_t *strip, int y0, int h, void *ctx)
@@ -498,7 +501,7 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
              * DMA 全在核 1 上跑，核 0 直接去模拟下一帧。只有上一帧还没推完
              * 时才会在这里阻塞 —— 天然的背压。 */
             memcpy(s_present, s_framebuf, SNES_FB_BYTES);
-            display_stream(snes_strip, s_present);
+            display_stream_sized(snes_strip, s_present, DISP_W, DISP_H);
             drawn_frames++;
         }
 #endif
