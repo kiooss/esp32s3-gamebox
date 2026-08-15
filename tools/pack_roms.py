@@ -198,6 +198,11 @@ def main():
     if not roms:
         sys.exit("没有一个文件通过 ROM 头校验")
 
+    # 按平台分组，同类游戏在菜单里排在一起；list.sort 是稳定排序，组内
+    # 顺序仍是上面按文件名排出来的那个顺序（NES 靠文件名前的两位数字，
+    # 其它平台靠字母序），只是把各平台的段落聚拢，不打乱组内已有的顺序。
+    roms.sort(key=lambda r: r[3])
+
     # 数据区从目录表之后开始，且各 ROM 4 字节对齐。
     # 先算好每个 ROM 的偏移，再一次写出去。
     cursor = HEADER_SIZE + ENTRY_SIZE * len(roms)

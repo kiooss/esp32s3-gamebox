@@ -42,10 +42,14 @@ add_custom_target(roms_image ALL DEPENDS "${ROMS_IMAGE}")
 # roms 分区在 partitions.csv 里的偏移。改了那个文件记得同步这里。
 set(ROMS_OFFSET 0x210000)
 
+# ${ESPTOOL_WRITE_FLASH_ARGS} 在这个手写 target 里其实展开成空——那个变量是
+# esptool_py 组件给它自己生成的 flash target 用的，这个 add_custom_target
+# 够不到。结果这条命令一直没带 -b，退回 esptool 保守的默认波特率，烧 11+ MB
+# 镜像要十几分钟。改成显式 -b 460800，和 `idf.py flash` 烧 app 用的一致。
 add_custom_target(flash-roms
     COMMAND ${CMAKE_COMMAND} -E echo
             "烧 ROM 分区到 ${ROMS_OFFSET}（13 MB 分区，约数分钟）"
-    COMMAND python3 -m esptool --chip esp32s3 ${ESPTOOL_WRITE_FLASH_ARGS}
+    COMMAND python3 -m esptool --chip esp32s3 -b 460800
             write_flash ${ROMS_OFFSET} "${ROMS_IMAGE}"
     DEPENDS "${ROMS_IMAGE}"
     VERBATIM
