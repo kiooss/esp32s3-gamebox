@@ -1,15 +1,17 @@
 /*
  * Game Boy / Game Boy Color 模拟器适配层
  *
- * gnuboy 输出 160x144 的大端 RGB565。本屏的公共画布是 288x224，采用 3:2
- * 等比最近邻放大到 240x216，四周留黑边。没有为 GBC 另开一套显示驱动：仍由
- * display_stream() 在核 1 上逐条带缩放和 DMA，核 0 同时模拟下一帧。
+ * gnuboy 输出 160x144 的大端 RGB565。参照 retro-go 的 RG_DISPLAY_SCALING_FULL
+ * （components/retro-go/rg_display.c 的 update_viewport_scaling()：直接拉伸到
+ * screen_width x screen_height，不保长宽比）铺满整块 320x240 面板，不用公共的
+ * 288x224 画布——和 Genesis 一样走 display_stream_sized() 提交自己的原生尺寸。
+ * 横向 160->320 正好整数 2x；纵向 144->240 是 3:5，非整数，个别源行会被
+ * 复制两次（同 retro-go 的最近邻映射，没有过滤）。
  *
  * 两块 160x144 RGB565 源缓冲放 PSRAM。它们不参与 DMA，只由核 0 写、核 1
  * 读；若强塞内部 RAM，会和 NES 的两块 64 KB 热 vidbuf 以及 DMA 条带争空间。
  */
 
-#include <string.h>
 #include "gbc_emu.h"
 #include "audio_output.h"
 #include "display.h"
@@ -26,12 +28,8 @@
 
 static const char *TAG = "gbc";
 
-#define GBC_SCALE_NUM       3
-#define GBC_SCALE_DEN       2
-#define GBC_OUT_W           (GB_WIDTH * GBC_SCALE_NUM / GBC_SCALE_DEN)
-#define GBC_OUT_H           (GB_HEIGHT * GBC_SCALE_NUM / GBC_SCALE_DEN)
-#define GBC_OUT_X           ((DISP_FB_W - GBC_OUT_W) / 2)
-#define GBC_OUT_Y           ((DISP_FB_H - GBC_OUT_H) / 2)
+#define GBC_OUT_W           DISP_W
+#define GBC_OUT_H           DISP_H
 #define GBC_FRAME_PERIOD_US 16742  /* 4.194304 MHz / 70224 clocks = 59.7275 Hz */
 #define GBC_AUDIO_S16_COUNT (AUDIO_OUTPUT_MAX_FRAMES_PER_PACKET * 2)
 
@@ -43,37 +41,33 @@ static const char *TAG = "gbc";
                               AUDIO_OUTPUT_SAMPLE_RATE)
 #define GBC_I2S_SAMPLE_RATE  (GBC_AUDIO_CLOCK / GBC_AUDIO_DIV)
 
-_Static_assert(GBC_OUT_W == 240 && GBC_OUT_H == 216,
-               "GBC 画面应按 3:2 放大到 240x216");
-_Static_assert(GBC_OUT_W <= DISP_FB_W && GBC_OUT_H <= DISP_FB_H,
-               "GBC 放大结果必须能装进公共画布");
+_Static_assert(GBC_OUT_W == GB_WIDTH * 2,
+               "GBC 横向铺满面板要求整数 2x");
+_Static_assert(GBC_OUT_W <= DISP_W && GBC_OUT_H <= DISP_H,
+               "GBC 输出尺寸不能超过面板");
 
 static uint16_t *s_framebuf[2];
 static int16_t  *s_soundbuf;
 static int       s_draw_idx;
 
-/* gnuboy 已经输出大端 RGB565，这里只做 3:2 最近邻放大。每两个源像素写三个
- * 目标像素；竖向同理用整数映射，避免每像素除法和浮点数。 */
+/* gnuboy 已经输出大端 RGB565。横向 160->320 是整数 2x，每个源像素原样写两遍。
+ * 纵向 144->240 不是整数比，用最近邻按 retro-go 同样的 step 公式取源行
+ * （见文件头注释）；每帧整块画布都会被写满，不用先清黑边。 */
 static void gbc_strip(uint16_t *strip, int y0, int h, void *ctx)
 {
     const uint16_t *frame = ctx;
-    memset(strip, 0, (size_t)DISP_FB_W * h * sizeof(uint16_t));
 
     for (int r = 0; r < h; r++) {
         int out_y = y0 + r;
-        if (out_y < GBC_OUT_Y || out_y >= GBC_OUT_Y + GBC_OUT_H) continue;
-
-        int src_y = (out_y - GBC_OUT_Y) * GBC_SCALE_DEN / GBC_SCALE_NUM;
+        int src_y = (out_y * GB_HEIGHT) / GBC_OUT_H;
         const uint16_t *src = frame + (size_t)src_y * GB_WIDTH;
-        uint16_t *dst = strip + (size_t)r * DISP_FB_W + GBC_OUT_X;
+        uint16_t *dst = strip + (size_t)r * GBC_OUT_W;
 
-        for (int x = 0; x < GB_WIDTH; x += 2) {
-            uint16_t c0 = src[x];
-            uint16_t c1 = src[x + 1];
-            dst[0] = c0;
-            dst[1] = c0;
-            dst[2] = c1;
-            dst += 3;
+        for (int x = 0; x < GB_WIDTH; x++) {
+            uint16_t c = src[x];
+            dst[0] = c;
+            dst[1] = c;
+            dst += 2;
         }
     }
 }
@@ -85,7 +79,7 @@ static void black_strip(uint16_t *strip, int y0, int h, void *ctx)
 
 static void video_callback(void *buffer)
 {
-    display_stream(gbc_strip, buffer);
+    display_stream_sized(gbc_strip, buffer, GBC_OUT_W, GBC_OUT_H);
 }
 
 /* gnuboy 的 length 是交错立体声 int16_t 的个数，不是帧数。 */
