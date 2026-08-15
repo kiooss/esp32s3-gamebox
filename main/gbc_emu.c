@@ -12,6 +12,7 @@
  * 读；若强塞内部 RAM，会和 NES 的两块 64 KB 热 vidbuf 以及 DMA 条带争空间。
  */
 
+#include <string.h>
 #include "gbc_emu.h"
 #include "audio_output.h"
 #include "display.h"
@@ -88,6 +89,54 @@ static void audio_callback(void *buffer, size_t length)
     audio_output_submit_stereo(buffer, length / 2);
 }
 
+/* 配色切换：只对原版单色 GB 卡带有意义——lcd.c 的 sync_palette() 只在
+ * !IS_CGB 时读 GB.video.colorize，真彩色 GBC 卡带走自己的调色板，切了
+ * 也没有视觉效果，所以主循环只在非 CGB 卡带上响应按键。
+ *
+ * 触发键选 X：map_pad() 根本不读 GAMEPAD_BIT_X，GB 模式下这颗键天生空闲，
+ * 单点即切，不用像 SNES 存档组合键那样加长按防误触。 */
+typedef struct {
+    gb_palette_t id;
+    const char  *name;
+} gbc_palette_preset_t;
+
+static const gbc_palette_preset_t PALETTE_PRESETS[] = {
+    { GB_PALETTE_DMG,  "DMG GREEN" },
+    { GB_PALETTE_MGB0, "POCKET GRAY 1" },
+    { GB_PALETTE_MGB1, "POCKET GRAY 2" },
+    { GB_PALETTE_CGB,  "AUTO COLOR" },
+    { GB_PALETTE_SGB,  "SUPER GB" },
+};
+#define PALETTE_PRESET_COUNT \
+    (sizeof(PALETTE_PRESETS) / sizeof(PALETTE_PRESETS[0]))
+
+static int s_palette_idx;
+
+typedef struct {
+    const uint16_t *frame;
+    const char     *name;
+} palette_notice_t;
+
+/* 复用 gbc_strip 把最后一帧完整帧缓冲缩放上屏，再盖一条配色名提示——
+ * 和 snes_emu.c 的 save_notice_strip 同一个套路。 */
+static void palette_notice_strip(uint16_t *strip, int y0, int h, void *ctx)
+{
+    const palette_notice_t *notice = ctx;
+    gbc_strip(strip, y0, h, (void *)notice->frame);
+
+    int text_w = (int)strlen(notice->name) * 6;
+    int x = (GBC_OUT_W - text_w) / 2;
+    display_fill_rect(x - 8, 108, text_w + 16, 24, C_BLACK);
+    display_text(x, 116, notice->name, C_YELLOW, 1);
+}
+
+static void show_palette_notice(const uint16_t *frame, const char *name)
+{
+    palette_notice_t notice = { .frame = frame, .name = name };
+    display_stream_sized(palette_notice_strip, &notice, GBC_OUT_W, GBC_OUT_H);
+    display_wait_idle();
+}
+
 static int map_pad(uint16_t state)
 {
     int pad = 0;
@@ -158,6 +207,15 @@ esp_err_t gbc_emu_run(const rom_store_entry_t *entry)
         return ESP_FAIL;
     }
 
+    /* gnuboy 默认 .video.colorize = GB_PALETTE_CGB：原版单色 GB 卡带没有
+     * 自己的调色板时，会按真实 GBC 开机 BIOS 的算法（查卡名校验和）套一套
+     * 彩色配色，效果是本该单色的游戏也花花绿绿。这里强制成 GB_PALETTE_DMG
+     * （原版墨绿单色 LCD 的四级色阶）。对真正的 GBC 卡带无影响——lcd.c 的
+     * sync_palette() 只在 !IS_CGB 时读这个设置，彩色卡带走自己的调色板。
+     * 和 s_palette_idx 默认值 0（PALETTE_PRESETS[0] = DMG）保持一致，
+     * 玩家可以用 X 键循环切换到其它预设，见下方主循环。 */
+    gnuboy_set_palette(GB_PALETTE_DMG);
+
     s_draw_idx = 0;
     gnuboy_set_framebuffer(s_framebuf[s_draw_idx]);
     gnuboy_set_soundbuffer(s_soundbuf, GBC_AUDIO_S16_COUNT);
@@ -178,19 +236,36 @@ esp_err_t gbc_emu_run(const rom_store_entry_t *entry)
            (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
     printf("开始模拟，目标 59.7 fps。\n\n");
 
+    /* 只有非 CGB 卡带才响应配色切换键——理由见 palette_notice_strip 之前
+     * 的注释。hwtype 装 ROM 时就定了，整个运行期间不变，出循环外算一次。 */
+    bool palette_switchable = (gnuboy_get_hwtype() != GB_HW_CGB);
+
     int last_pad = -1;
+    uint16_t last_raw = 0;
     int frames = 0;
     int64_t emu_us = 0;
     int64_t stat_t0 = esp_timer_get_time();
     int64_t next_frame = stat_t0;
 
     while (1) {
-        int pad = map_pad(input_serial_poll() | input_gamepad_poll() |
-                          input_usb_poll());
+        uint16_t raw = input_serial_poll() | input_gamepad_poll() |
+                       input_usb_poll();
+        int pad = map_pad(raw);
         if (pad != last_pad) {
             gnuboy_set_pad(pad);
             last_pad = pad;
         }
+
+        /* X 键边沿触发：map_pad() 不读它，raw 里的 X 位对 gnuboy 完全透明，
+         * 不需要像 SNES 存档组合键那样把这一位从 raw/pad 里摘掉。 */
+        if (palette_switchable &&
+            (raw & GAMEPAD_BIT_X) && !(last_raw & GAMEPAD_BIT_X)) {
+            s_palette_idx = (s_palette_idx + 1) % PALETTE_PRESET_COUNT;
+            gnuboy_set_palette(PALETTE_PRESETS[s_palette_idx].id);
+            show_palette_notice(s_framebuf[s_draw_idx ^ 1],
+                                 PALETTE_PRESETS[s_palette_idx].name);
+        }
+        last_raw = raw;
 
         int64_t frame_t0 = esp_timer_get_time();
         gnuboy_run(true);
