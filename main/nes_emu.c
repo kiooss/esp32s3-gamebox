@@ -7,11 +7,15 @@
  * 画面怎么放：
  *   NES 输出 256x240，但上下各 8 行是 overscan —— 真电视上看不到，很多游戏
  *   那里就是垃圾数据，所以裁掉，剩 256x224。
- *   竖向 224 行 1:1 直接用，不再抽行（以前受内部 RAM 限制要每 7 行丢 1 行）。
- *   横向 256 -> 288，每 8 个源像素输出 9 个，修 NES 的 8:7 像素宽高比。
- *   为什么是 9:8、为什么不铺满 320，都记在 display.h 的画布那一节。
+ *   横向 256->320 是整数 5:4 扩展，纵向 224->240（15:14，非整数比）在
+ *   nes_strip 里最近邻取源行，不再挂公共 288x224 画布，走
+ *   display_stream_sized() 铺满整块 320x240 面板，和 SNES/GB/GBC/Genesis
+ *   同一套做法。
  *
- *   居中落点由 display.h 算：左右各 16 列、上下各 8 行黑边。
+ *   display.h 画布节曾记录过一条旧结论：铺满 320 宽会让 SPI 带宽撑不住、
+ *   掉到 30fps，且 nofrendo 跳帧会让精灵永久消失。在当前条带流式推屏 +
+ *   双缓冲架构下上板实测已证伪——稳定 60fps，未观察到精灵丢失，详情见
+ *   display.h。
  *
  * ---- 双缓冲在这一层 ----
  *
@@ -21,9 +25,7 @@
  * 就渲染进那块去，两边互不干扰。
  *
  * 8 位的 vidbuf 每块 64 KB，两块 128 KB —— 比两块 RGB565 整帧（252 KB）
- * 便宜一半，这正是能升到 288x224 的原因。
- *
- * 黑边只在开机时清一次，之后每帧只推 288x224 那块区域，不会被动到。
+ * 便宜一半，这正是能升到 320x240 的原因。
  */
 
 #include <string.h>
@@ -153,18 +155,14 @@ extern const uint8_t rom_end[]   asm(ROM_ASM(ROM_SYM, end));
 #define SRC_Y1      232                 /* 不含，共 224 行 */
 #define SRC_W       256
 
-/* 横向 9:8 扩展：每 GROUP_SRC 个源像素输出 GROUP_DST 个。256/8*9 = 288。
+/* 横向 256->320 是整数 5:4 扩展：每 GROUP_SRC 个源像素输出 GROUP_DST 个。
  * 复制点落在 NES 图块（8 像素宽且对齐）的边界上，视觉上最不突兀。 */
-#define GROUP_SRC   8
-#define GROUP_DST   9
+#define GROUP_SRC   4
+#define GROUP_DST   5
 
-/* 画布 = NES 可见区竖向 1:1、横向 9:8（display.h 里 DISP_FB_W/H = 288x224）。
- * 居中落在面板上由 display.c 负责，所以这里的绘图坐标从 (0,0) 起。 */
-_Static_assert(DISP_FB_W == SRC_W / GROUP_SRC * GROUP_DST,
-               "画布宽度要等于 NES 画面宽度做完 9:8 扩展的结果");
-_Static_assert(DISP_FB_H == SRC_Y1 - SRC_Y0,
-               "画布高度要和裁掉 overscan 后的行数一致");
-_Static_assert(SRC_W % GROUP_SRC == 0, "源宽度要能被 8 整除，内循环才好展开");
+_Static_assert(DISP_W == SRC_W / GROUP_SRC * GROUP_DST,
+               "面板宽度要等于 NES 画面宽度做完 5:4 扩展的结果");
+_Static_assert(SRC_W % GROUP_SRC == 0, "源宽度要能被 4 整除，内循环才好展开");
 
 static uint16_t s_palette[256]; /* 8 位索引 -> RGB565（大端，见 display.h） */
 static uint8_t  *s_vidbuf[2];   /* 各 NES_SCREEN_PITCH * NES_SCREEN_HEIGHT */
@@ -217,29 +215,28 @@ static esp_err_t build_palette(void)
 }
 
 /* 条带回调 —— 跑在**核 1** 上。把 vidbuf 的第 y0..y0+h-1 行（画布坐标）
- * 查调色板转成 RGB565，同时做横向 9:8 扩展，写进这块条带缓冲。
+ * 查调色板转成 RGB565，同时做横向 5:4 扩展，写进这块条带缓冲。
  *
- * 内循环按 8 个源像素一组展开：查 8 次表、写 9 个像素（最后一个重复），
- * 没有分支也没有取模。 */
+ * 纵向 224->240 不是整数比，每行按 retro-go 的 step 公式取源行（和
+ * gbc_strip/snes_strip 同一套算法，没有插值）。横向内循环按 4 个源像素
+ * 一组展开：查 4 次表、写 5 个像素（最后一个重复），没有分支也没有取模。 */
 static void nes_strip(uint16_t *strip, int y0, int h, void *ctx)
 {
     const uint8_t  *vidbuf = ctx;
     const uint16_t *pal    = s_palette;
 
     for (int r = 0; r < h; r++) {
-        const uint8_t *src = vidbuf + (size_t)(SRC_Y0 + y0 + r) * NES_SCREEN_PITCH
+        int src_row = (y0 + r) * (SRC_Y1 - SRC_Y0) / DISP_H;
+        const uint8_t *src = vidbuf + (size_t)(SRC_Y0 + src_row) * NES_SCREEN_PITCH
                                     + NES_SCREEN_OVERDRAW;
-        uint16_t      *dst = strip + (size_t)r * DISP_FB_W;
+        uint16_t      *dst = strip + (size_t)r * DISP_W;
 
         for (int g = SRC_W / GROUP_SRC; g > 0; g--) {
             uint16_t c0 = pal[src[0]], c1 = pal[src[1]];
             uint16_t c2 = pal[src[2]], c3 = pal[src[3]];
-            uint16_t c4 = pal[src[4]], c5 = pal[src[5]];
-            uint16_t c6 = pal[src[6]], c7 = pal[src[7]];
 
             dst[0] = c0; dst[1] = c1; dst[2] = c2; dst[3] = c3;
-            dst[4] = c4; dst[5] = c5; dst[6] = c6; dst[7] = c7;
-            dst[8] = c7;                    /* 复制点落在图块边界上 */
+            dst[4] = c3;                    /* 复制点落在图块边界上 */
 
             src += GROUP_SRC;
             dst += GROUP_DST;
@@ -268,7 +265,7 @@ static void blit_frame(uint8_t *vidbuf)
      * nes_setvidbuf() 只是个指针交换（nes.c），而 nofrendo 在调完 blit 之后
      * 本帧就不再碰 vidbuf 了（nes.c 里 blit_func 之后只剩 apu_emulate），
      * 所以在这里换是安全的 —— 下一帧的 ppu_renderline 会写进新的那块。 */
-    display_stream(nes_strip, vidbuf);
+    display_stream_sized(nes_strip, vidbuf, DISP_W, DISP_H);
 
     s_draw_idx ^= 1;
     nes_setvidbuf(s_vidbuf[s_draw_idx]);
