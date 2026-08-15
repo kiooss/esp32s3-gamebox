@@ -22,6 +22,8 @@ __license__ = "GPLv3"
 #include <assert.h>
 #include <ctype.h>
 
+#include "esp_heap_caps.h"
+
 #include "m68k.h"
 
 #include "ym2612.h"
@@ -72,7 +74,11 @@ unsigned char *M68K_RAM;
 
 
 // Setup Z80 Memory
-unsigned char ZRAM[MAX_Z80_RAM_SIZE]; // Z80 RAM
+/* 曾是静态数组，8 KiB 常驻内部 SRAM——和 M68K_RAM 同一个问题：Genesis 代码
+ * 一旦链接进固件，这块内存无论选没选 Genesis 都占着，把 SNES 本已吃紧的
+ * 内部 SRAM 预算再挤掉 8 KiB。改成 load_cartridge() 里按需申请，同 M68K_RAM
+ * 一样只在真正启动 Genesis 时才占用。 */
+unsigned char *ZRAM; // Z80 RAM
 unsigned char TMSS[0x4];
 extern unsigned short gwenesis_vdp_status;
 
@@ -107,6 +113,10 @@ void load_cartridge()
 
 void load_cartridge(unsigned char *buffer, size_t size)
 {
+    if (!ZRAM) {
+        ZRAM = heap_caps_malloc(MAX_Z80_RAM_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+
     // Clear all volatile memory
     memset(M68K_RAM, 0, MAX_RAM_SIZE);
     memset(ZRAM, 0, MAX_Z80_RAM_SIZE);

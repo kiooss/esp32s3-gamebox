@@ -136,6 +136,8 @@
 #include <string.h>
 #include <math.h>
 
+#include "esp_heap_caps.h"
+
 #include "ym2612.h"
 #include "gwenesis_bus.h"
 #include "gwenesis_savestate.h"
@@ -206,12 +208,16 @@ void ym_log(const char *subs, const char *fmt, ...) {
 *   TL_RES_LEN - sinus resolution (X axis)
 */
 #define TL_TAB_LEN (13*2*TL_RES_LEN)
-static signed int tl_tab[TL_TAB_LEN];
+/* 曾是静态数组，编译期就常驻内部 SRAM。这块和下面的 sin_tab/lfo_pm_table
+ * 都是开机算一次的查表，本可以放哪都行，但因为链接进固件就永久占用，
+ * 会把 SNES 本已吃紧的内部 SRAM 预算挤掉几十 KB（同 gwenesis_bus.c 的
+ * M68K_RAM/ZRAM 一个道理）。改成 init_tables() 里按需申请。 */
+static signed int *tl_tab;
 
 #define ENV_QUIET    (TL_TAB_LEN>>3)
 
 /* sin waveform table in 'decibel' scale */
-static unsigned int sin_tab[SIN_LEN] ;
+static unsigned int *sin_tab;
 
 /* sustain level table (3dB per step) */
 /* bit0, bit1, bit2, bit3, bit4, bit5, bit6 */
@@ -506,9 +512,9 @@ static const UINT8 lfo_pm_output[7*8][8]={
 
 /* all 128 LFO PM waveforms */
 #if GW_TARGET
-static UINT8 lfo_pm_table[128*8*16];  /* 128 combinations of 7 bits meaningful (of F-NUMBER), 8 LFO depths, 32 LFO output levels per one depth */
+static UINT8 *lfo_pm_table;  /* 128 combinations of 7 bits meaningful (of F-NUMBER), 8 LFO depths, 32 LFO output levels per one depth */
 #else
-static INT32 lfo_pm_table[128*8*32] ;  /* 128 combinations of 7 bits meaningful (of F-NUMBER), 8 LFO depths, 32 LFO output levels per one depth */
+static INT32 *lfo_pm_table;  /* 128 combinations of 7 bits meaningful (of F-NUMBER), 8 LFO depths, 32 LFO output levels per one depth */
 #endif
 
 /* register number to channel number , slot offset */
@@ -1844,6 +1850,23 @@ static void init_tables(void)
   signed int d,i,x;
   signed int n;
   double o,m;
+
+  /* 三张表按需申请，只在真正启动 Genesis 时占用内部 SRAM（原因见文件顶部
+   * tl_tab 声明处的注释）。逐样本查表是音频热路径，仍旧钉在内部 SRAM，
+   * 不下放 PSRAM——避免重蹈 docs/memory.md 记录过的断音问题。 */
+  if (!tl_tab) tl_tab = heap_caps_malloc(TL_TAB_LEN * sizeof(*tl_tab),
+                                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (!sin_tab) sin_tab = heap_caps_malloc(SIN_LEN * sizeof(*sin_tab),
+                                           MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (!lfo_pm_table) {
+#if GW_TARGET
+    lfo_pm_table = heap_caps_malloc(128*8*16 * sizeof(*lfo_pm_table),
+                                    MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#else
+    lfo_pm_table = heap_caps_malloc(128*8*32 * sizeof(*lfo_pm_table),
+                                    MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#endif
+  }
 
   /* build Linear Power Table */
   for (x=0; x<TL_RES_LEN; x++)

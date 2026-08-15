@@ -116,10 +116,15 @@ NES 适配层没有强制申请大块 PSRAM。nofrendo 自身若做大于 16 KiB
 | 两块 320×241 索引帧 | 约 2 × 75 KiB | PSRAM | 单核写一块、LCD 条带回调读另一块，不直接做 DMA |
 | 每帧调色板快照 | 2 × 512 B | 静态 RAM | LCD 异步读取时不受下一模拟帧 CRAM 改写影响 |
 | ROM | 当前 4 MiB | PSRAM | Gwenesis 会原地交换 16 位字节序 |
-| YM2612/PSG 状态与表 | 上游静态区 | 片内 SRAM | retro-go 原组件按单核热数据布局 |
+| Z80 RAM（ZRAM） | 8 KiB | 片内 SRAM，选中 Genesis 后申请 | Z80 音频协处理器的工作内存 |
+| YM2612 三张查表 | 26+4+16 = 46 KiB | 片内 SRAM，选中 Genesis 后申请 | tl_tab/sin_tab/lfo_pm_table，开机算一次，逐样本查表要留在片内 |
 
-retro-go 原组件把 64 KiB M68K RAM 做成静态数组，会让开机时第二块 NES 缓冲分配
-失败；Gamebox 只把它改成选中 Genesis、释放 NES 预留内存后再动态申请，仍放片内。
+retro-go 原组件把 64 KiB M68K RAM、8 KiB ZRAM 和上述三张 YM2612 查表全部做成
+静态数组，会让开机时第二块 NES 缓冲分配失败；Gamebox 把这五处全改成指针，选中
+Genesis、释放 NES 预留内存后才申请，仍放片内。**只改 M68K RAM 那一处并不够**——
+2026-08-15 定位到 SNES 启动黑屏就是因为遗漏了 ZRAM 和三张查表，这 54 KiB
+静态占用只要固件链接了 Genesis 代码就常驻，把 SNES 已经很紧张的内部 SRAM 预算
+（见 §1.1 的 179 KiB）挤没了；详情见 `components/gwenesis/README.gamebox.md`。
 模拟部分沿用 retro-go 的单核逐扫描线顺序，固定每 4 帧生成并提交一张画面；CPU、IRQ
 和声音芯片仍在每个模拟帧运行。Sonic 实机轻场景约 58–59 fps，重场景约 38–49 fps，
 显示约 9–15 fps。落后时每帧主动让出 1 tick 后不再触发任务看门狗，I2S 连续
