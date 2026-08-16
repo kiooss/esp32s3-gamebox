@@ -18,6 +18,10 @@
 #include "esp_log.h"
 #include "display.h"
 #include "audio_output.h"
+#include "input_serial.h"
+#include "input_usb.h"
+#include "input_gamepad.h"
+#include "nofrendo.h"
 #include "nes_emu.h"
 #include "gbc_emu.h"
 #include "snes_emu.h"
@@ -95,8 +99,10 @@ static void screen_diagnostic(void)
 
 /* 平台色块用的颜色和 rom_menu.c 的 system_color() 保持一致（RED=NES /
  * MAGENTA=SNES / GREEN=GB / YELLOW=GBC / BLUE=Genesis），两个画面看到的
- * 颜色含义是同一套，不用各自重新学一遍。 */
-static void splash_strip(uint16_t *strip, int y0, int h, void *ctx)
+ * 颜色含义是同一套，不用各自重新学一遍。splash_strip 和 boot_menu_strip
+ * 共用这部分（标题/副标题/平台色块/上下分割线），只有分割线下方的内容
+ * 不一样，所以拆出来避免抄两份。 */
+static void splash_frame_common(void)
 {
     display_clear(C_BLACK);
     display_rect(0, 0, DISP_FB_W, DISP_FB_H, C_GRAY);
@@ -120,7 +126,11 @@ static void splash_strip(uint16_t *strip, int y0, int h, void *ctx)
     }
 
     display_hline(24, 136, DISP_FB_W - 48, C_GRAY);
+}
 
+static void splash_strip(uint16_t *strip, int y0, int h, void *ctx)
+{
+    splash_frame_common();
     display_text(114, 176, "loading...", C_GRAY, 1);
 }
 
@@ -128,6 +138,57 @@ static void splash(void)
 {
     display_stream_sync(splash_strip, NULL);
     vTaskDelay(pdMS_TO_TICKS(1500));
+}
+
+/* loading 那 1.5 秒过完之后，开机画面停下来问 GAME/TEST，不再自动往下走——
+ * 之前是只要 PAD_DIAG_SCREEN=1（编译期开关）就每次开机都强制看一遍摇杆
+ * 诊断画面，想跳过看不了。现在交给玩家自己选：GAME 直接进 ROM 菜单，
+ * TEST 先看一遍 input_gamepad_show() 那套摇杆/按键可视化。 */
+#define BOOT_MENU_POLL_MS 16   /* 和 rom_menu.c 的 POLL_MS 同一个量级 */
+
+static void boot_menu_strip(uint16_t *strip, int y0, int h, void *ctx)
+{
+    const int *selected = ctx;
+    splash_frame_common();
+
+    static const char *labels[2] = { "GAME", "TEST" };
+    const int char_w = 6 * 2;               /* scale 2 */
+    const int word_w = 4 * char_w;          /* "GAME"/"TEST" 都是 4 个字符 */
+    const int gap = 40;
+    int x = (DISP_FB_W - (word_w * 2 + gap)) / 2;
+    const int y = 168;
+
+    for (int i = 0; i < 2; i++) {
+        if (i == *selected) {
+            display_fill_rect(x - 6, y - 3, word_w + 12, 7 * 2 + 6, C_CYAN);
+            display_text(x, y, labels[i], C_BLACK, 2);
+        } else {
+            display_text(x, y, labels[i], C_GRAY, 2);
+        }
+        x += word_w + gap;
+    }
+}
+
+static bool boot_menu(void)
+{
+    int selected = 0;
+    display_stream_sync(boot_menu_strip, &selected);
+
+    uint16_t prev = input_serial_poll() | input_gamepad_poll() | input_usb_poll();
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(BOOT_MENU_POLL_MS));
+        uint16_t now = input_serial_poll() | input_gamepad_poll() | input_usb_poll();
+        uint16_t edge = now & ~prev;
+        prev = now;
+
+        if (edge & (NES_PAD_LEFT | NES_PAD_RIGHT)) {
+            selected ^= 1;
+            display_stream_sync(boot_menu_strip, &selected);
+        }
+        if (edge & (NES_PAD_A | NES_PAD_START)) {
+            return selected == 1;   /* true = TEST */
+        }
+    }
 }
 
 void app_main(void)
@@ -153,6 +214,15 @@ void app_main(void)
     screen_diagnostic();
 #endif
     splash();
+
+    /* boot_menu() 要读输入，所以三路输入源在这里先装好；rom_menu_pick()
+     * 里还会再调一遍，都是幂等的，不会重复初始化出问题。 */
+    input_serial_init();
+    input_usb_init();
+    input_gamepad_init();
+    if (boot_menu()) {
+        input_gamepad_show();
+    }
 
     /* 开机选单只返回目录项；各模拟器在自己的大块内存准备妥当后再解压，SNES
      * 尤其不能先解出 4 MiB 再复制一份，否则 8 MiB PSRAM 会在峰值时耗尽。

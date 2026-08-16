@@ -365,10 +365,6 @@ void input_gamepad_init(void)
         printf("  按键没起来（见上面的警告），请用串口 K/J/回车/Tab\n");
     }
     printf("  方向不对就改 input_gamepad.h 里的 PAD_INVERT_X/Y、PAD_SWAP_XY\n\n");
-
-#if PAD_DIAG_SCREEN
-    input_gamepad_show();
-#endif
 }
 
 uint16_t input_gamepad_poll(void)

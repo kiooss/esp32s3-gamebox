@@ -107,7 +107,6 @@ enum {
  * 最后这条判据实测有用：2026-08-09 排查摇杆失灵时，就是靠它发现两路读数
  * 恒等（相关系数 0.999），最终定位到洞洞板上两根轴线之间的电阻性短路 ——
  * 几百欧到几 kΩ，万用表通断档不响，但足以把两个 10k 电位器拉在一起。 */
-#define PAD_DIAG_SCREEN  1
 
 /* 装 GPIO + ADC。必须在开始模拟之前调用一次。
  * 会顺便采一次摇杆的静止位置做中位校准 —— 所以**上电时手别碰摇杆**。
@@ -119,6 +118,7 @@ void input_gamepad_init(void);
 uint16_t input_gamepad_poll(void);
 
 /* 摇杆/按键可视化，同时按 SNES A+B（Shield B+C）退出。
- * 需要 display_init() 已经跑过。
- * PAD_DIAG_SCREEN=1 时 input_gamepad_init() 末尾会自动调它。 */
+ * 需要 display_init() 已经跑过。开机画面选 TEST 时 main.c 会调它；
+ * 不再是 input_gamepad_init() 自动触发的（那样每次开机都得看一遍，
+ * 想跳过看不了）。 */
 void input_gamepad_show(void);

@@ -46,7 +46,9 @@ idf.py flash-roms                                          # 只在加/删顶层
 | `DISP_PROFILE`（默认 1） | `main/display.c` | 每秒打一行核 1 推屏耗时。调 `BAND_LINES` / 画布尺寸时看这个 |
 | `DIAG_TIMING` | `main/nes_emu.c` | 开机跑一遍分阶段计时（只 CPU / +PPU / 完整），定位核 0 瓶颈 |
 | `SHOW_DISPLAY_SELFTEST` | `main/main.c` | 点屏诊断图，验旋转/颜色顺序/反色 |
-| `PAD_DIAG_SCREEN`（默认 1） | `main/input_gamepad.h` | 开机画摇杆位置 + 两路原始 ADC 值 |
+
+开机画面（`main.c`）现在会停下来问 GAME/TEST：选 TEST 才会进摇杆位置 +
+两路原始 ADC 值的诊断画面（`input_gamepad_show()`），不再是编译期开关。
 
 运行时核 0 每秒自报 `NES 60 fps (模拟+转换 8.1 ms/帧，CPU 余量 52%)`。
 两个核并行，帧时间是 `max(核 0, 核 1)`，所以两个数要分开看。
