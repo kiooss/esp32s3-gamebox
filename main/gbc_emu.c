@@ -117,7 +117,10 @@ static const gbc_palette_preset_t PALETTE_PRESETS[] = {
 #define PALETTE_PRESET_COUNT \
     (sizeof(PALETTE_PRESETS) / sizeof(PALETTE_PRESETS[0]))
 
-static int s_palette_idx;
+/* 开机默认档位：POCKET GRAY 2（GB_PALETTE_MGB1）。 */
+#define PALETTE_DEFAULT_IDX 2
+
+static int s_palette_idx = PALETTE_DEFAULT_IDX;
 
 typedef struct {
     const uint16_t *frame;
@@ -216,12 +219,12 @@ esp_err_t gbc_emu_run(const rom_store_entry_t *entry)
 
     /* gnuboy 默认 .video.colorize = GB_PALETTE_CGB：原版单色 GB 卡带没有
      * 自己的调色板时，会按真实 GBC 开机 BIOS 的算法（查卡名校验和）套一套
-     * 彩色配色，效果是本该单色的游戏也花花绿绿。这里强制成 GB_PALETTE_DMG
-     * （原版墨绿单色 LCD 的四级色阶）。对真正的 GBC 卡带无影响——lcd.c 的
-     * sync_palette() 只在 !IS_CGB 时读这个设置，彩色卡带走自己的调色板。
-     * 和 s_palette_idx 默认值 0（PALETTE_PRESETS[0] = DMG）保持一致，
+     * 彩色配色，效果是本该单色的游戏也花花绿绿。这里强制成
+     * PALETTE_PRESETS[PALETTE_DEFAULT_IDX]（POCKET GRAY 2）。对真正的
+     * GBC 卡带无影响——lcd.c 的 sync_palette() 只在 !IS_CGB 时读这个设置，
+     * 彩色卡带走自己的调色板。和 s_palette_idx 的初始值取自同一个宏，
      * 玩家可以用 X 键循环切换到其它预设，见下方主循环。 */
-    gnuboy_set_palette(GB_PALETTE_DMG);
+    gnuboy_set_palette(PALETTE_PRESETS[PALETTE_DEFAULT_IDX].id);
 
     s_draw_idx = 0;
     gnuboy_set_framebuffer(s_framebuf[s_draw_idx]);
