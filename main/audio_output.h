@@ -18,12 +18,14 @@
 /* 游戏装载后初始化 MAX98357 和音频消费任务。失败时模拟器仍可静音运行。 */
 esp_err_t audio_output_init(uint32_t sample_rate);
 
-/* 在开机选单前把声音重置为默认开启。开关只在本次运行中有效，不读写 NVS。 */
+/* 在开机选单前把音量重置为默认档位。只在本次运行中有效，不读写 NVS。 */
 esp_err_t audio_output_settings_init(void);
 
-/* 菜单里的声音开关；set 立即作用，但重启后一定恢复默认开启。 */
-bool audio_output_is_muted(void);
-esp_err_t audio_output_set_muted(bool muted);
+/* 菜单里的音量档位：0~100，menu 只用 10 的整数倍。0 视为静音——
+ * audio_output_init() 会因此完全不启动 I2S/DMA/消费任务。set 立即生效
+ * （消费任务下一包就按新档位淡变），但重启后一定恢复默认档位。 */
+int audio_output_get_volume(void);
+esp_err_t audio_output_set_volume(int percent);
 
 /* 向 I2S 队列提交交错排列的立体声 S16 帧。只复制、不等待 DMA；队列满时
  * 丢当前包并记入诊断计数。所有模拟器共用这一条宿主接口。 */

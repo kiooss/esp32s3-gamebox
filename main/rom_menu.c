@@ -65,7 +65,7 @@ typedef struct {
     int sel;
     int first;
     int visible_count;
-    bool muted;
+    int volume;
     rom_system_t systems[PAGE_ROWS];
     char lines[PAGE_ROWS][64];
 } draw_args_t;
@@ -108,8 +108,10 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
     display_clear(C_BLACK);
 
     display_text(TEXT_X, TITLE_Y, "游戏选择", C_CYAN, 1);
-    display_text(SOUND_X, PAGE_Y, a->muted ? "声音:关" : "声音:开",
-                 a->muted ? C_GRAY : C_GREEN, 1);
+    char vol_text[16];
+    snprintf(vol_text, sizeof(vol_text), "声音:%d", a->volume);
+    display_text(SOUND_X, PAGE_Y, vol_text,
+                 a->volume == 0 ? C_GRAY : C_GREEN, 1);
 
     char page_text[32];
     snprintf(page_text, sizeof(page_text), "%d/%d", page + 1, page_count);
@@ -160,7 +162,7 @@ static void draw(int count, int sel)
         .count = count,
         .sel = sel,
         .first = (sel / PAGE_ROWS) * PAGE_ROWS,
-        .muted = audio_output_is_muted(),
+        .volume = audio_output_get_volume(),
     };
 
     int last = a.first + PAGE_ROWS;
@@ -210,11 +212,13 @@ bool rom_menu_pick(const rom_store_entry_t **entry, uint16_t *launch_keys)
         uint16_t edge = now & ~prev;    /* 这一帧新按下的位 */
         prev = now;
 
-        /* B 在开机选单里没有游戏语义，正好做本次开机的声音开关；进游戏后
-         * 仍完整保留原来的 B（跑/发射），重启则总是恢复默认开启。 */
+        /* B 在开机选单里没有游戏语义，正好做本次开机的音量调节：每按一次
+         * 加 10%，到 100% 再按一次绕回 0%（和 GB 配色切换键同一套循环手感）。
+         * 进游戏后仍完整保留原来的 B（跑/发射），重启则总是恢复默认档位。 */
         if (edge & NES_PAD_B) {
-            bool muted = !audio_output_is_muted();
-            audio_output_set_muted(muted);
+            int volume = audio_output_get_volume() + 10;
+            if (volume > 100) volume = 0;
+            audio_output_set_volume(volume);
             draw(count, sel);
             continue;
         }

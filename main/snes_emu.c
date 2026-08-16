@@ -549,7 +549,7 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
         }
         if (frame_peak > pcm_peak) pcm_peak = frame_peak;
         if (frame_peak != 0) pcm_nonzero++;
-        if (s_audio_ok && !audio_output_is_muted()) {
+        if (s_audio_ok && audio_output_get_volume() > 0) {
             audio_output_submit_stereo(s_soundbuf, s_audio_frames);
         }
         audio_us += esp_timer_get_time() - t2;
