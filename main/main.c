@@ -27,10 +27,17 @@
 #include "snes_emu.h"
 #include "genesis_emu.h"
 #include "rom_menu.h"
+#include "overclock.h"
 
 static const char *TAG = "main";
 
 #define SHOW_DISPLAY_SELFTEST  0
+
+/* 超频实验开关，见 overclock.h。0 = 不动寄存器，维持 Kconfig 里配置的 240MHz；
+ * 非零走 overclock_apply()，档位范围 [-8, 8]，实测主频打印在串口日志的
+ * "overclock" tag 下。先从这个值开始测，稳定的话再往上加、不稳就往下退——
+ * 一次只改这一个数，配合 nes_emu.c 每秒自报的 "CPU 余量" 那行看效果。 */
+#define OVERCLOCK_LEVEL 0
 
 static void print_board_info(void)
 {
@@ -193,6 +200,10 @@ static bool boot_menu(void)
 
 void app_main(void)
 {
+#if OVERCLOCK_LEVEL != 0
+    overclock_apply(OVERCLOCK_LEVEL);
+#endif
+
     print_board_info();
 
     /* 必须先于 display_init()：NES 视频缓冲要 65 KB 连续内部内存，

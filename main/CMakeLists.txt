@@ -4,7 +4,7 @@ idf_component_register(SRCS "main.c" "display.c" "menu_font.c" "nes_emu.c"
                             "gbc_emu.c" "snes_emu.c" "snes_save.c" "genesis_emu.c"
                             "rgb_led.c" "audio_output.c"
                             "input_serial.c" "input_gamepad.c" "input_usb.c"
-                            "rom_store.c" "rom_menu.c"
+                            "rom_store.c" "rom_menu.c" "overclock.c"
                        INCLUDE_DIRS "."
                        REQUIRES nofrendo gnuboy snes9x gwenesis
                                 esp_partition  # roms 分区 mmap
