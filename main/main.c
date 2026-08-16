@@ -8,6 +8,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -92,18 +93,41 @@ static void screen_diagnostic(void)
 }
 #endif
 
+/* 平台色块用的颜色和 rom_menu.c 的 system_color() 保持一致（RED=NES /
+ * MAGENTA=SNES / GREEN=GB / YELLOW=GBC / BLUE=Genesis），两个画面看到的
+ * 颜色含义是同一套，不用各自重新学一遍。 */
 static void splash_strip(uint16_t *strip, int y0, int h, void *ctx)
 {
     display_clear(C_BLACK);
-    display_text(58, 58,  "ESP32-S3  NES", C_WHITE, 2);
-    display_text(58, 84,  "nofrendo", C_GRAY, 1);
-    display_text(58, 98,  "loading...", C_GRAY, 1);
+    display_rect(0, 0, DISP_FB_W, DISP_FB_H, C_GRAY);
+
+    display_text(81, 40, "GAMEBOX", C_WHITE, 3);
+    display_text(96, 70, "ESP32-S3  5-IN-1", C_GRAY, 1);
+
+    display_hline(24, 94, DISP_FB_W - 48, C_GRAY);
+
+    static const struct { const char *label; uint16_t color; } systems[] = {
+        { "[NES]",  C_RED },
+        { "[SNES]", C_MAGENTA },
+        { "[GB]",   C_GREEN },
+        { "[GBC]",  C_YELLOW },
+        { "[MD]",   C_BLUE },
+    };
+    int x = 64;
+    for (size_t i = 0; i < sizeof(systems) / sizeof(systems[0]); i++) {
+        display_text(x, 112, systems[i].label, systems[i].color, 1);
+        x += (int)strlen(systems[i].label) * 6 + 4;
+    }
+
+    display_hline(24, 136, DISP_FB_W - 48, C_GRAY);
+
+    display_text(114, 176, "loading...", C_GRAY, 1);
 }
 
 static void splash(void)
 {
     display_stream_sync(splash_strip, NULL);
-    vTaskDelay(pdMS_TO_TICKS(1200));
+    vTaskDelay(pdMS_TO_TICKS(1500));
 }
 
 void app_main(void)
