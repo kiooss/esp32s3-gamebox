@@ -45,6 +45,12 @@ static uint32_t s_write_errors;
 static uint32_t s_sample_rate;
 static atomic_int s_volume = ATOMIC_VAR_INIT(AUDIO_VOLUME_DEFAULT);
 
+/* 供 rgb_led.c 轮询的音量联动峰值：audio_task() 按已经过档位缩放的采样
+ * （不是模拟器产出的原始 PCM）记录峰值，静音或调低音量时灯自然跟着暗，
+ * 不会出现"听不见但灯还在闪"的错位。take 语义（读后清零）让每次轮询
+ * 拿到的是"上次轮询以来"的峰值，不会被同一窗口内的旧值覆盖漏掉瞬态。 */
+static atomic_int s_recent_peak = ATOMIC_VAR_INIT(0);
+
 esp_err_t audio_output_settings_init(void)
 {
     /* 音量档位只服务于当前菜单选择，不再读写 NVS。这样即使用户调低或静音，
@@ -66,6 +72,11 @@ esp_err_t audio_output_set_volume(int percent)
     atomic_store_explicit(&s_volume, percent, memory_order_relaxed);
     ESP_LOGI(TAG, "音量：%d%%（仅本次开机有效）", percent);
     return ESP_OK;
+}
+
+int audio_output_take_peak(void)
+{
+    return atomic_exchange_explicit(&s_recent_peak, 0, memory_order_relaxed);
 }
 
 /* 原样透传满量程 PCM——不再像早期那样固定 >>2 留 25% 天花板。缩放全部
@@ -126,8 +137,13 @@ static void audio_task(void *arg)
         if (gain_q15 == 0 && target_gain == 0) {
             /* 稳定静音是常态路径，整包清零比每个采样做乘法快得多。 */
             memset(packet.stereo, 0, packet_bytes);
-        } else if (gain_q15 != AUDIO_GAIN_MAX_Q15 || target_gain != AUDIO_GAIN_MAX_Q15) {
-            /* 只有正在淡变的约 20ms 才逐采样缩放；稳定开启零额外开销。 */
+        } else {
+            /* AUDIO_GAIN_MAX_Q15 不是真正的酉增益（90% 满量程），所以
+             * "稳定不淡变就跳过缩放"这条快捷路径已经不安全——之前直接
+             * 判等 32768 的写法在满量程封顶改成 90% 后会漏乘，把没缩放
+             * 过的原始采样直接送 I2S。改成每个采样都过一遍，顺便把缩放
+             * 后（也就是耳朵真正听到）的峰值记下来供 LED 联动读取。 */
+            int32_t peak = 0;
             for (uint16_t i = 0; i < packet.sample_count; i++) {
                 if (gain_q15 < target_gain) {
                     gain_q15 += fade_step;
@@ -136,10 +152,18 @@ static void audio_task(void *arg)
                     gain_q15 -= fade_step;
                     if (gain_q15 < target_gain) gain_q15 = target_gain;
                 }
-                packet.stereo[i * 2] =
-                    (int16_t)((int32_t)packet.stereo[i * 2] * gain_q15 / 32768);
-                packet.stereo[i * 2 + 1] =
-                    (int16_t)((int32_t)packet.stereo[i * 2 + 1] * gain_q15 / 32768);
+                int16_t l = (int16_t)((int32_t)packet.stereo[i * 2] * gain_q15 / 32768);
+                int16_t r = (int16_t)((int32_t)packet.stereo[i * 2 + 1] * gain_q15 / 32768);
+                packet.stereo[i * 2] = l;
+                packet.stereo[i * 2 + 1] = r;
+
+                int32_t mag = l < 0 ? -(int32_t)l : l;
+                if (mag > peak) peak = mag;
+                mag = r < 0 ? -(int32_t)r : r;
+                if (mag > peak) peak = mag;
+            }
+            if (peak > atomic_load_explicit(&s_recent_peak, memory_order_relaxed)) {
+                atomic_store_explicit(&s_recent_peak, peak, memory_order_relaxed);
             }
         }
 

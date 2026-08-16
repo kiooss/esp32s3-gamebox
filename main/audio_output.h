@@ -27,6 +27,11 @@ esp_err_t audio_output_settings_init(void);
 int audio_output_get_volume(void);
 esp_err_t audio_output_set_volume(int percent);
 
+/* 供 rgb_led.c 轮询的音量联动：返回自上次调用以来、已经过档位缩放的
+ * 采样峰值幅度（0~32767），读完立即清零。周期性轮询（比如每 40ms）
+ * 就能拿到"这一小段时间里有多响"，静音或调低音量时也会跟着变小。 */
+int audio_output_take_peak(void);
+
 /* 向 I2S 队列提交交错排列的立体声 S16 帧。只复制、不等待 DMA；队列满时
  * 丢当前包并记入诊断计数。所有模拟器共用这一条宿主接口。 */
 void audio_output_submit_stereo(const int16_t *samples, size_t frame_count);

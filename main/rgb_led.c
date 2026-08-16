@@ -8,6 +8,7 @@
 
 #include "rgb_led.h"
 #include "led_strip.h"
+#include "audio_output.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -17,7 +18,13 @@ static const char *TAG = "rgb_led";
 #define EFFECT_TICK_MS     40
 #define BREATH_STEPS       128
 #define BREATH_MIN         2
-#define BREATH_MAX         36      /* 峰值约 14%，避免板载灯刺眼 */
+#define BREATH_MAX         36      /* 呼吸基线峰值约 14%，避免板载灯刺眼 */
+
+/* 音效联动：在呼吸亮度之上叠一层音量包络，单极点低通平滑（见下面
+ * rainbow_task 里的用法），涨落都柔化，不会跟着 8-bit 音乐逐帧的音量
+ * 抖动一起闪。 */
+#define AUDIO_BOOST_MAX    80
+#define AUDIO_SMOOTH_SHIFT 3    /* 每 tick 走 1/8，时间常数约 8 tick（~320ms） */
 
 static led_strip_handle_t s_strip;
 
@@ -25,6 +32,7 @@ static void rainbow_task(void *arg)
 {
     uint16_t hue = 0;
     uint8_t breath_phase = 0;
+    uint8_t audio_env = 0;
     while (1) {
         /* 先生成 0..255..0 的三角相位，再平方做近似 gamma 校正。
          * 肉眼对暗部更敏感，平方后会缓慢亮起、自然熄灭，不会像线性三角波
@@ -36,6 +44,18 @@ static void rainbow_task(void *arg)
         uint32_t curved = (uint32_t)ramp * ramp;
         uint8_t value = BREATH_MIN +
             (curved * (BREATH_MAX - BREATH_MIN) + 32512) / 65025;
+
+        /* 音效联动：峰值幅度（0~32767）压到 0~255，叠在呼吸亮度上面。
+         * 一开始做的是「秒起、匀速落」，实测跟着 8-bit 音乐逐帧的音量
+         * 抖动一起闪，很晃眼。改成单极点低通对涨落都做平滑——每 tick
+         * 只往目标值走 1/8，时间常数约 8 tick（~320ms），看起来是连续
+         * 的呼吸感而不是逐帧闪烁。没有音频活动时目标一直是 0，几百毫秒
+         * 后 audio_env 收敛到 0，等于没这层东西。 */
+        uint8_t peak_255 = (uint8_t)(audio_output_take_peak() >> 7);
+        audio_env = (uint8_t)(audio_env +
+            (((int16_t)peak_255 - (int16_t)audio_env) >> AUDIO_SMOOTH_SHIFT));
+        uint16_t boosted = value + (uint32_t)audio_env * AUDIO_BOOST_MAX / 255;
+        value = boosted > 255 ? 255 : (uint8_t)boosted;
 
         esp_err_t err = led_strip_set_pixel_hsv(s_strip, 0, hue, 255, value);
         if (err == ESP_OK) err = led_strip_refresh(s_strip);
@@ -89,7 +109,8 @@ esp_err_t rgb_led_start_rainbow(void)
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG, "GPIO%d 幻彩呼吸已启动（亮度 %d~%d/255，呼吸约 5.1 秒）",
-             RGB_LED_GPIO, BREATH_MIN, BREATH_MAX);
+    ESP_LOGI(TAG, "GPIO%d 幻彩呼吸已启动（亮度 %d~%d/255，呼吸约 5.1 秒，"
+                  "音效联动叠加最多 +%d）",
+             RGB_LED_GPIO, BREATH_MIN, BREATH_MAX, AUDIO_BOOST_MAX);
     return ESP_OK;
 }
