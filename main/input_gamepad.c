@@ -34,6 +34,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nofrendo.h"
+#include "rom_store.h"
 
 static const char *TAG = "pad";
 
@@ -194,6 +195,7 @@ typedef struct {
     int     rx, ry, ex, ey;         /* 原始读数 / 去中位后的偏移 */
     uint8_t d;                      /* 折算出的方向键位 */
     uint16_t keys;                  /* 面键 + SELECT/START */
+    const char *storage;            /* ROM 分区占用摘要，诊断画面开着期间不变 */
 } viz_t;
 
 static int draw_key_status(int x, int y, const char *name, bool pressed)
@@ -235,6 +237,8 @@ static void viz_strip(uint16_t *strip, int y0, int h, void *ctx)
     x = draw_key_status(x, y, "SEL(F)", v->keys & GAMEPAD_BIT_SELECT);
     x = draw_key_status(x, y, "START(E)", v->keys & GAMEPAD_BIT_START);
     display_text(x + 4, y, "A+B EXIT", C_YELLOW, 1);
+
+    display_text(4, y + 14, v->storage, C_CYAN, 1);
 }
 
 static uint16_t read_buttons(void)
@@ -269,6 +273,21 @@ void input_gamepad_show(void)
     const int R   = BOX / 2;
 
     const uint16_t exit_combo = GAMEPAD_BIT_A | GAMEPAD_BIT_B;
+
+    /* 存储占用只需要读一次——rom_menu_pick() 走到这里之前已经调过
+     * rom_store_init()，诊断画面开着的这几秒分区占用也不会变。 */
+    size_t used = 0, capacity = 0;
+    rom_store_usage(&used, &capacity);
+    char storage_line[40];
+    if (capacity > 0) {
+        int pct = (int)((uint64_t)used * 100 / capacity);
+        snprintf(storage_line, sizeof(storage_line),
+                 "ROM %d%% USED  %.1fMB FREE", pct,
+                 (capacity - used) / (1024.0f * 1024.0f));
+    } else {
+        snprintf(storage_line, sizeof(storage_line), "ROM STORAGE: N/A");
+    }
+
     printf("\n摇杆可视化：点跟着手走就说明映射对了。"
            "屏下方会高亮按下的键，同时按 SNES A+B 退出。\n");
     /* 上次退出或上电时若还按着其中一键，先等两键全部松开。 */
@@ -302,7 +321,8 @@ void input_gamepad_show(void)
 
         viz_t v = { .bx = BX, .by = BY, .box = BOX, .hc = HC, .vc = VC,
                     .px = px, .py = py, .rx = rx, .ry = ry,
-                    .ex = ex, .ey = ey, .d = d, .keys = keys };
+                    .ex = ex, .ey = ey, .d = d, .keys = keys,
+                    .storage = storage_line };
         display_stream_sync(viz_strip, &v);     /* v 在栈上，必须等推完 */
     }
     /* 必须等 A/B 都松开才返回；否则先松 A 后松 B 时，残留的 B

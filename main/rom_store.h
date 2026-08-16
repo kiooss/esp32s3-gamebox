@@ -72,3 +72,7 @@ esp_err_t rom_store_load(const rom_store_entry_t *entry, size_t extra_bytes,
 
 /* 只释放 rom_store_load() 真正分配的缓冲；mmap 指针不会被误 free。 */
 void rom_store_image_release(rom_store_image_t *image);
+
+/* roms 分区已用字节数（目录表 + 所有认到的 ROM 数据的末端偏移）和分区总容量。
+ * 必须先调用过 rom_store_init() 才有意义；分区不可用时两个都是 0。 */
+void rom_store_usage(size_t *used_bytes, size_t *capacity_bytes);

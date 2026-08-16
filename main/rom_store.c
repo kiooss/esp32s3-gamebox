@@ -84,7 +84,9 @@ static bool rom_header_ok(rom_system_t system, const uint8_t *rom, size_t size)
 }
 
 static rom_store_entry_t s_entries[ROM_STORE_MAX];
-static int  s_count = -1;       /* -1 = 还没试过 */
+static int    s_count = -1;       /* -1 = 还没试过 */
+static size_t s_used_bytes;       /* 目录表 + 所有认到的 ROM 数据的末端偏移 */
+static size_t s_capacity_bytes;   /* roms 分区总容量 */
 
 /* 小端读一个 u32。镜像是小端，ESP32 也是小端，但显式读避免对齐假设 ——
  * 目录项是 48 字节对齐的，u32 字段落在 4 字节边界上，其实直接解引用也行，
@@ -106,6 +108,7 @@ int rom_store_init(void)
         ESP_LOGW(TAG, "找不到 roms 分区（分区表是旧的？）");
         return 0;
     }
+    s_capacity_bytes = part->size;
 
     /* 整个分区映射进来。ESP32-S3 的 flash mmap 窗口足够容纳当前 13 MB 分区。
      * 不解除映射：ROM 指针要在整个运行期间一直有效。 */
@@ -142,6 +145,7 @@ int rom_store_init(void)
         ESP_LOGE(TAG, "目录表超出分区大小");
         return 0;
     }
+    s_used_bytes = dir_end;   /* 目录表本身总是占用的字节数，下面逐条抬高 */
 
     int n = 0;
     for (uint32_t i = 0; i < count; i++) {
@@ -202,6 +206,9 @@ int rom_store_init(void)
         s_entries[n].system = system;
         s_entries[n].codec = (rom_codec_t)codec;
         n++;
+
+        size_t end = (size_t)off + stored_size;
+        if (end > s_used_bytes) s_used_bytes = end;
     }
 
     s_count = n;
@@ -213,6 +220,12 @@ const rom_store_entry_t *rom_store_entry(int i)
 {
     if (i < 0 || i >= s_count) return NULL;
     return &s_entries[i];
+}
+
+void rom_store_usage(size_t *used_bytes, size_t *capacity_bytes)
+{
+    if (used_bytes) *used_bytes = s_used_bytes;
+    if (capacity_bytes) *capacity_bytes = s_capacity_bytes;
 }
 
 esp_err_t rom_store_load(const rom_store_entry_t *entry, size_t extra_bytes,
