@@ -216,10 +216,16 @@ void app_main(void)
     splash();
 
     /* boot_menu() 要读输入，所以三路输入源在这里先装好；rom_menu_pick()
-     * 里还会再调一遍，都是幂等的，不会重复初始化出问题。 */
+     * 里还会再调一遍，都是幂等的，不会重复初始化出问题。
+     *
+     * rom_store_init() 也提到这里先调一次：选 TEST 会在 rom_menu_pick()
+     * 之前就进 input_gamepad_show()，而摇杆诊断画面里的 ROM 分区占用行
+     * 靠 rom_store_usage() 读数据——不提前调这一下，分区还没被认过，
+     * 诊断画面只能显示 "ROM STORAGE: N/A"。同样是幂等调用。 */
     input_serial_init();
     input_usb_init();
     input_gamepad_init();
+    rom_store_init();
     if (boot_menu()) {
         input_gamepad_show();
     }
