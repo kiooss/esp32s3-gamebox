@@ -278,12 +278,13 @@ void input_gamepad_show(void)
      * rom_store_init()，诊断画面开着的这几秒分区占用也不会变。 */
     size_t used = 0, capacity = 0;
     rom_store_usage(&used, &capacity);
-    char storage_line[40];
+    char storage_line[48];
     if (capacity > 0) {
         int pct = (int)((uint64_t)used * 100 / capacity);
         snprintf(storage_line, sizeof(storage_line),
-                 "ROM %d%% USED  %.1fMB FREE", pct,
-                 (capacity - used) / (1024.0f * 1024.0f));
+                 "ROM %.1f/%.1fMB %d%% (%.1fMB FREE)",
+                 used / (1024.0f * 1024.0f), capacity / (1024.0f * 1024.0f),
+                 pct, (capacity - used) / (1024.0f * 1024.0f));
     } else {
         snprintf(storage_line, sizeof(storage_line), "ROM STORAGE: N/A");
     }
