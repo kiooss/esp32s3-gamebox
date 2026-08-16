@@ -432,7 +432,7 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
     printf("开始模拟，跳帧 %d（画 1 帧跳 %d 帧）。\n\n",
            SNES_FRAMESKIP, SNES_FRAMESKIP);
     if (save_enabled) {
-        printf("SMW 即时存档：同时长按 SELECT + START 1 秒保存；下次启动自动恢复。%s\n\n",
+        printf("SMW 即时存档：同时长按 SELECT + A 1 秒保存；下次启动自动恢复。%s\n\n",
                cold_start_requested
                    ? "本次按住 Y 跳过恢复并从头开始，原存档仍保留。"
                    : (resumed ? (recovered_previous
