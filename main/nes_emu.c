@@ -41,10 +41,16 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 
 static const char *TAG = "nes";
+
+/* 退出到 ROM 菜单：SELECT+START 长按 1 秒触发 esp_restart()。nofrendo 没有
+ * 卡带电池 SRAM 落盘机制，软重启不丢数据。 */
+#define EXIT_COMBO_BITS (GAMEPAD_BIT_SELECT | GAMEPAD_BIT_START)
+#define EXIT_HOLD_US    1000000
 
 /* ---- 编译期嵌入的回退 ROM ----
  *
@@ -452,11 +458,25 @@ esp_err_t nes_emu_run(const rom_store_entry_t *entry)
     input_gamepad_init();
 
     s_next_frame = s_stat_t0 = s_frame_t0 = esp_timer_get_time();
+    int64_t exit_hold_t0 = 0;
     while (1) {
         /* 端口 0 的手柄在 input_init() 里已经接好了，这里只管更新状态。
          * 按位或：两路谁按下都算数。 */
-        input_update(0, (uint8_t)(input_serial_poll() | input_gamepad_poll() |
-                                 input_usb_poll()));
+        uint16_t raw = input_serial_poll() | input_gamepad_poll() |
+                      input_usb_poll();
+
+        bool exit_combo = (raw & EXIT_COMBO_BITS) == EXIT_COMBO_BITS;
+        if (exit_combo) {
+            /* 组合键属于系统，不让游戏同时收到 SELECT/START。 */
+            raw &= ~EXIT_COMBO_BITS;
+            int64_t now = esp_timer_get_time();
+            if (exit_hold_t0 == 0) exit_hold_t0 = now;
+            if (now - exit_hold_t0 >= EXIT_HOLD_US) esp_restart();
+        } else {
+            exit_hold_t0 = 0;
+        }
+
+        input_update(0, (uint8_t)raw);
         nes_emulate(true);
     }
 

@@ -12,8 +12,11 @@
  *     一块 119 KB，内部 SRAM 腾不出第二块。理由见 s_framebuf/s_present 处。
  *
  *  2. **仅 SMW 有即时存档，L/R 暂无实体键**。Shield 四个大键已按
- *     物理方位映射完整 SNES ABXY，F/E 小键对应 SELECT/START。SMW 用两小键长按保存，
- *     实现在宿主 snes_save.c，不改 Snes9x 核心。
+ *     物理方位映射完整 SNES ABXY，F/E 小键对应 SELECT/START。SMW 用
+ *     SELECT+A（A 键实体丝印是 B）长按 1 秒保存，实现在宿主 snes_save.c，
+ *     不改 Snes9x 核心。SELECT+START 长按 1 秒是全局退出键，触发
+ *     esp_restart() 软重启回到 ROM 菜单——没有任何模拟器落盘卡带电池
+ *     SRAM，重启不丢真实存档。
  *
  *  3. **跳帧默认为 3**（画 1 帧跳 3 帧）。这不是保守估计，是上游 retro-go
  *     给 SNES 写死的初值（main_snes.c: `app->frameskip = 3;`），
@@ -35,6 +38,7 @@
 #include "snes_save.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -74,8 +78,15 @@ _Static_assert(DISP_W == SNES_WIDTH / GROUP_SRC * GROUP_DST,
 
 /* SMW 的即时存档组合键。两键从按下那一帧起就不传给游戏，持续 1 秒才写盘，
  * 避免正常按 START 暂停时误存；松开以后才能再触发下一次。 */
-#define SAVE_COMBO_BITS    (GAMEPAD_BIT_SELECT | GAMEPAD_BIT_START)
+#define SAVE_COMBO_BITS    (GAMEPAD_BIT_SELECT | GAMEPAD_BIT_A)
 #define SAVE_HOLD_US       1000000
+
+/* 退出到 ROM 菜单：SELECT+START 长按 1 秒触发 esp_restart()。全局键，不像
+ * 存档那样区分卡带——没有任何模拟器实现卡带电池 SRAM 落盘（SNES 唯一的
+ * 存档功能是上面这条独立的全量状态存档，重启不影响它），所以直接软重启
+ * 回 app_main -> rom_menu_pick 不会丢数据。 */
+#define EXIT_COMBO_BITS    (GAMEPAD_BIT_SELECT | GAMEPAD_BIT_START)
+#define EXIT_HOLD_US       1000000
 
 /* 内部 SRAM 只腾得出约 179 KB（NES 那 128 KB 还回来之后），而想放进去的有：
  * 帧缓冲 119 KB、WRAM 128 KB、VRAM 64 KB —— 任意两个都放不下。
@@ -451,6 +462,7 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
     int64_t next_frame   = stat_t0;
     int64_t save_hold_t0 = 0;
     bool save_latched    = false;
+    int64_t exit_hold_t0 = 0;
 
     while (1) {
         s_pad_state = input_serial_poll() | input_gamepad_poll() | input_usb_poll();
@@ -458,7 +470,7 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
         bool save_combo = save_enabled &&
                           (s_pad_state & SAVE_COMBO_BITS) == SAVE_COMBO_BITS;
         if (save_combo) {
-            /* 组合键属于系统，不让 SMW 同时收到 SELECT/START。 */
+            /* 组合键属于系统，不让 SMW 同时收到 SELECT/A。 */
             s_pad_state &= ~SAVE_COMBO_BITS;
             int64_t now = esp_timer_get_time();
             if (save_hold_t0 == 0) save_hold_t0 = now;
@@ -480,6 +492,22 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
         } else {
             save_hold_t0 = 0;
             save_latched = false;
+        }
+
+        bool exit_combo = (s_pad_state & EXIT_COMBO_BITS) == EXIT_COMBO_BITS;
+        if (exit_combo) {
+            /* 组合键属于系统，不让游戏同时收到 SELECT/START。 */
+            s_pad_state &= ~EXIT_COMBO_BITS;
+            int64_t now = esp_timer_get_time();
+            if (exit_hold_t0 == 0) exit_hold_t0 = now;
+
+            if (now - exit_hold_t0 >= EXIT_HOLD_US) {
+                show_save_notice("EXITING...", C_YELLOW);
+                vTaskDelay(pdMS_TO_TICKS(300));
+                esp_restart();
+            }
+        } else {
+            exit_hold_t0 = 0;
         }
 
         bool draw_frame = (skip_frames == 0);

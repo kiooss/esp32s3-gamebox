@@ -23,6 +23,7 @@
 #include "gnuboy.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -33,6 +34,12 @@ static const char *TAG = "gbc";
 #define GBC_OUT_H           DISP_H
 #define GBC_FRAME_PERIOD_US 16742  /* 4.194304 MHz / 70224 clocks = 59.7275 Hz */
 #define GBC_AUDIO_S16_COUNT (AUDIO_OUTPUT_MAX_FRAMES_PER_PACKET * 2)
+
+/* 退出到 ROM 菜单：SELECT+START 长按 1 秒触发 esp_restart()。gnuboy 没有
+ * 任何卡带电池 SRAM 落盘（cart.sram_dirty 只在内存里，从没写过 flash），
+ * 软重启不丢数据。 */
+#define EXIT_COMBO_BITS     (GAMEPAD_BIT_SELECT | GAMEPAD_BIT_START)
+#define EXIT_HOLD_US        1000000
 
 /* gnuboy 用整数 `round(2^21 / requested_rate)` 做采样分频。请求 24000 时
  * 分频值是 87，实际产出 2^21/87 = 24105.2 Hz；I2S 若仍消费 24000 Hz，
@@ -114,26 +121,26 @@ static int s_palette_idx;
 
 typedef struct {
     const uint16_t *frame;
-    const char     *name;
-} palette_notice_t;
+    const char     *text;
+} gbc_notice_t;
 
-/* 复用 gbc_strip 把最后一帧完整帧缓冲缩放上屏，再盖一条配色名提示——
- * 和 snes_emu.c 的 save_notice_strip 同一个套路。 */
-static void palette_notice_strip(uint16_t *strip, int y0, int h, void *ctx)
+/* 复用 gbc_strip 把最后一帧完整帧缓冲缩放上屏，再盖一条文字提示——和
+ * snes_emu.c 的 save_notice_strip 同一个套路。配色切换和退出提示共用。 */
+static void gbc_notice_strip(uint16_t *strip, int y0, int h, void *ctx)
 {
-    const palette_notice_t *notice = ctx;
+    const gbc_notice_t *notice = ctx;
     gbc_strip(strip, y0, h, (void *)notice->frame);
 
-    int text_w = (int)strlen(notice->name) * 6;
+    int text_w = (int)strlen(notice->text) * 6;
     int x = (GBC_OUT_W - text_w) / 2;
     display_fill_rect(x - 8, 108, text_w + 16, 24, C_BLACK);
-    display_text(x, 116, notice->name, C_YELLOW, 1);
+    display_text(x, 116, notice->text, C_YELLOW, 1);
 }
 
-static void show_palette_notice(const uint16_t *frame, const char *name)
+static void show_gbc_notice(const uint16_t *frame, const char *text)
 {
-    palette_notice_t notice = { .frame = frame, .name = name };
-    display_stream_sized(palette_notice_strip, &notice, GBC_OUT_W, GBC_OUT_H);
+    gbc_notice_t notice = { .frame = frame, .text = text };
+    display_stream_sized(gbc_notice_strip, &notice, GBC_OUT_W, GBC_OUT_H);
     display_wait_idle();
 }
 
@@ -236,12 +243,13 @@ esp_err_t gbc_emu_run(const rom_store_entry_t *entry)
            (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
     printf("开始模拟，目标 59.7 fps。\n\n");
 
-    /* 只有非 CGB 卡带才响应配色切换键——理由见 palette_notice_strip 之前
+    /* 只有非 CGB 卡带才响应配色切换键——理由见 gbc_notice_strip 之前
      * 的注释。hwtype 装 ROM 时就定了，整个运行期间不变，出循环外算一次。 */
     bool palette_switchable = (gnuboy_get_hwtype() != GB_HW_CGB);
 
     int last_pad = -1;
     uint16_t last_raw = 0;
+    int64_t exit_hold_t0 = 0;
     int frames = 0;
     int64_t emu_us = 0;
     int64_t stat_t0 = esp_timer_get_time();
@@ -250,6 +258,22 @@ esp_err_t gbc_emu_run(const rom_store_entry_t *entry)
     while (1) {
         uint16_t raw = input_serial_poll() | input_gamepad_poll() |
                        input_usb_poll();
+
+        bool exit_combo = (raw & EXIT_COMBO_BITS) == EXIT_COMBO_BITS;
+        if (exit_combo) {
+            /* 组合键属于系统，不让游戏同时收到 SELECT/START。 */
+            raw &= ~EXIT_COMBO_BITS;
+            int64_t now = esp_timer_get_time();
+            if (exit_hold_t0 == 0) exit_hold_t0 = now;
+            if (now - exit_hold_t0 >= EXIT_HOLD_US) {
+                show_gbc_notice(s_framebuf[s_draw_idx ^ 1], "EXITING...");
+                vTaskDelay(pdMS_TO_TICKS(300));
+                esp_restart();
+            }
+        } else {
+            exit_hold_t0 = 0;
+        }
+
         int pad = map_pad(raw);
         if (pad != last_pad) {
             gnuboy_set_pad(pad);
@@ -257,13 +281,13 @@ esp_err_t gbc_emu_run(const rom_store_entry_t *entry)
         }
 
         /* X 键边沿触发：map_pad() 不读它，raw 里的 X 位对 gnuboy 完全透明，
-         * 不需要像 SNES 存档组合键那样把这一位从 raw/pad 里摘掉。 */
+         * 不需要像退出组合键那样把这一位从 raw/pad 里摘掉。 */
         if (palette_switchable &&
             (raw & GAMEPAD_BIT_X) && !(last_raw & GAMEPAD_BIT_X)) {
             s_palette_idx = (s_palette_idx + 1) % PALETTE_PRESET_COUNT;
             gnuboy_set_palette(PALETTE_PRESETS[s_palette_idx].id);
-            show_palette_notice(s_framebuf[s_draw_idx ^ 1],
-                                 PALETTE_PRESETS[s_palette_idx].name);
+            show_gbc_notice(s_framebuf[s_draw_idx ^ 1],
+                            PALETTE_PRESETS[s_palette_idx].name);
         }
         last_raw = raw;
 

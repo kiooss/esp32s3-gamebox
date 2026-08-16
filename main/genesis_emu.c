@@ -13,6 +13,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -47,6 +48,13 @@ static const char *TAG = "genesis";
 #define GEN_FRAME_STORAGE  (GEN_SOURCE_W * 241 + 64)
 #define GEN_AUDIO_BUF_LEN  GWENESIS_AUDIO_BUFFER_LENGTH_PAL
 #define GEN_FRAME_SKIP     3u
+
+/* 退出到 ROM 菜单：SELECT+START 长按 1 秒触发 esp_restart()。真实 Genesis
+ * 手柄没有 SELECT，这个位在本项目里只由 Shield 小键产生，update_input()
+ * 也没转发它，纯粹是系统层的组合键。没有卡带电池 SRAM 落盘，软重启不丢
+ * 数据（gwenesis_savestate.h 引入了但这个文件从没调用过它）。 */
+#define EXIT_COMBO_BITS    (GAMEPAD_BIT_SELECT | GAMEPAD_BIT_START)
+#define EXIT_HOLD_US       1000000
 
 _Static_assert(GEN_SOURCE_W <= DISP_W && GEN_VISIBLE_H <= DISP_H,
                "Genesis 原生画布必须能装进面板");
@@ -326,10 +334,23 @@ esp_err_t genesis_emu_run(const rom_store_entry_t *entry)
     int64_t emu_total = 0;
     uint16_t previous_keys = UINT16_MAX;
     uint32_t previous_hash = 0;
+    int64_t exit_hold_t0 = 0;
 
     while (1) {
         int64_t begin = esp_timer_get_time();
         uint16_t keys = input_serial_poll() | input_gamepad_poll() | input_usb_poll();
+
+        bool exit_combo = (keys & EXIT_COMBO_BITS) == EXIT_COMBO_BITS;
+        if (exit_combo) {
+            /* 组合键属于系统，不让 update_input() 看到 SELECT/START。 */
+            keys &= ~EXIT_COMBO_BITS;
+            int64_t now = esp_timer_get_time();
+            if (exit_hold_t0 == 0) exit_hold_t0 = now;
+            if (now - exit_hold_t0 >= EXIT_HOLD_US) esp_restart();
+        } else {
+            exit_hold_t0 = 0;
+        }
+
         if (keys != previous_keys) {
             update_input(keys);
             previous_keys = keys;
