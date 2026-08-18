@@ -4,7 +4,7 @@
 # 所以 app 扩到 2 MB。尾部的 SNES 存档分区保持原地址，已有存档不会被搬动；
 # 相应地 roms 起点后移 1 MB、容量从 14 MB 缩到 13 MB。
 #
-# roms 分区放当前 27 款游戏（Deflate 镜像约 10.61 MiB），并为继续换游戏留出余量。
+# roms 分区放当前 32 款游戏（Deflate 镜像约 11.95 MiB），并为继续换游戏留出余量。
 # 里面不是文件系统，
 # 是 tools/pack_roms.py 生成的自定义镜像：一张定长目录表 + 拼接的 ROM 数据。
 # 这样 main/rom_store.c 能直接 mmap，ROM 指针原样喂给 nofrendo，走的还是

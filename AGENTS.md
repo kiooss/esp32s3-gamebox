@@ -21,7 +21,7 @@ idf.py flash-roms                                          # 只在加/删顶层
 - 端口是板载 FT232R（丝印 `COM` 的 Type-C 口）。`A5069RR4` 是这颗芯片的序列号，
   换板子会变，用 `ls /dev/cu.usbserial-*` 确认。
 - `flash-roms` 是顶层 `CMakeLists.txt` 注册的自定义 target，**故意不挂在 `idf.py flash` 上**：
-  ROM 分区 13 MB，当前 27-ROM Deflate 镜像约 10.61 MiB，烧一次仍较久，而它几乎从不变。
+  ROM 分区 13 MB，当前 32-ROM Deflate 镜像约 11.95 MiB，烧一次仍较久，而它几乎从不变。
   烧录时间只跟镜像实际字节数走（`esptool write_flash` 写的是文件），跟分区开多大无关。
 - `sdkconfig` 不入库，由 `sdkconfig.defaults` 生成。要固化配置就改 `.defaults`，
   别改 `sdkconfig`（会被覆盖）。里面每一条都有理由（240 MHz CPU、1000 Hz tick、
