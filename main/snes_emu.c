@@ -417,9 +417,9 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
         }
     }
 
-    esp_err_t rgb_err = rgb_led_start_rainbow();
+    esp_err_t rgb_err = rgb_led_init();
     if (rgb_err != ESP_OK) {
-        ESP_LOGW(TAG, "板载 RGB 彩虹效果未启动：%s", esp_err_to_name(rgb_err));
+        ESP_LOGW(TAG, "板载 RGB 状态灯未启动：%s", esp_err_to_name(rgb_err));
     }
 
     printf("卡带：%s  映射 %s  %d fps  ROM %u KB\n",
@@ -502,6 +502,7 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
             if (exit_hold_t0 == 0) exit_hold_t0 = now;
 
             if (now - exit_hold_t0 >= EXIT_HOLD_US) {
+                rgb_led_off();
                 show_save_notice("EXITING...", C_YELLOW);
                 vTaskDelay(pdMS_TO_TICKS(300));
                 esp_restart();
@@ -604,6 +605,8 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
         if (now - stat_t0 >= 1000000) {
             int emu_fps10  = (int)(emu_frames * 10000000LL / (now - stat_t0));
             int draw_fps10 = (int)(drawn_frames * 10000000LL / (now - stat_t0));
+            int headroom   = 100 - (int)((emu_us + blit_us + audio_us) * 100 /
+                                          (now - stat_t0));
             printf("SNES 模拟 %d.%d fps / 推屏 %d.%d fps  "
                    "(模拟 %.1f + 拷贝 %.1f + 音频 %.1f ms/帧，CPU 余量 %d%%，"
                    "PCM峰值 %u，非零帧 %u/%d)\n",
@@ -612,9 +615,10 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
                    (float)emu_us / 1000.0f / emu_frames,
                    (float)blit_us / 1000.0f / emu_frames,
                    (float)audio_us / 1000.0f / emu_frames,
-                   100 - (int)((emu_us + blit_us + audio_us) * 100 /
-                               (now - stat_t0)),
+                   headroom,
                    (unsigned)pcm_peak, (unsigned)pcm_nonzero, emu_frames);
+            int fps_pct = draw_fps10 * 10 / fps;   /* draw_fps10 是 *10 定点，先乘 10 再除才是百分比 */
+            rgb_led_report_perf(fps_pct > 100 ? 100 : fps_pct);
             emu_frames = drawn_frames = 0;
             emu_us = blit_us = audio_us = 0;
             pcm_peak = pcm_nonzero = 0;

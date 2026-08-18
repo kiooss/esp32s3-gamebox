@@ -1,82 +1,60 @@
 /*
- * ESP32-S3-DevKitC-1 板载可寻址 RGB LED
+ * ESP32-S3-DevKitC-1 板载可寻址 RGB LED —— 开局帧率状态灯
+ *
+ * 最早的版本是彩虹呼吸 + 音效联动，纯装饰，颜色跟系统状态没有任何关联，
+ * 实测下来「有点鸡肋」。改成读数用途：把每个模拟器每秒统计的「实际帧率 /
+ * 目标帧率」分三档映射成三个原生色（绿/蓝/红），不用开串口 monitor 扫一眼
+ * 灯就知道帧率有没有掉。一开始用的是「CPU 余量」（cpu 占用率），实测那
+ * 个数字基本只跟 ROM 走、同一局游戏里几乎不变，灯跟摆设一样；换成帧率
+ * 达成率以后才真的会随卡顿波动。
+ *
+ * 故意不用连续色相渐变——亮度压到 value=4 这么暗时，混色（比如红黄之间
+ * 的过渡）会因为通道只剩 0~2 那几档而分不清，原生色因为全程只点亮一个
+ * LED 芯片、不混色，同样的暗度下反而看得清。
+ *
+ * 数据本身就是每秒才更新一次，不需要常驻任务做动画，直接在调用点同步设
+ * 一次颜色即可，比原来的 FreeRTOS 呼吸任务简单。
+ *
+ * 只在刚进游戏的头 10 秒亮，之后灭掉：常亮在实际玩的时候反而是干扰，
+ * 开局这几秒看一眼「稳不稳」就够了。每次进新游戏（rgb_led_init() 被调用）
+ * 都会重新打开这个 10 秒窗口。
  *
  * 这块实物用红/蓝对照测过：GPIO38 不亮，GPIO48 能正确显示蓝色，所以固定
- * 用 GPIO48。只驱动一颗像素，RMT 每次发送约 30 us；40 ms 更新一次，对
- * 60 fps 模拟器的影响远小于一帧预算。
+ * 用 GPIO48。
  */
 
+#include <stdbool.h>
 #include "rgb_led.h"
 #include "led_strip.h"
-#include "audio_output.h"
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
+#include "esp_timer.h"
 
 static const char *TAG = "rgb_led";
-#define RGB_LED_GPIO       48
-#define EFFECT_TICK_MS     40
-#define BREATH_STEPS       128
-#define BREATH_MIN         2
-#define BREATH_MAX         36      /* 呼吸基线峰值约 14%，避免板载灯刺眼 */
+#define RGB_LED_GPIO   48
+/* 亮度封顶，实测标定出来的下限：value=4 时如果用红黄绿连续渐变色相，混色
+ * 通道只有 0~2 那几档，肉眼分不清；改成三个"原生色"（单通道纯色：红/绿/蓝
+ * 各自只点亮 WS2812 里的一个芯片，不混色）以后，value=4 一样能明确分辨，
+ * 不受量化影响——这才是这颗灯能压到多暗的真正下限，不是色相算法的问题。 */
+#define STATUS_VALUE   4
 
-/* 音效联动：在呼吸亮度之上叠一层音量包络，单极点低通平滑（见下面
- * rainbow_task 里的用法），涨落都柔化，不会跟着 8-bit 音乐逐帧的音量
- * 抖动一起闪。 */
-#define AUDIO_BOOST_MAX    80
-#define AUDIO_SMOOTH_SHIFT 3    /* 每 tick 走 1/8，时间常数约 8 tick（~320ms） */
+/* 帧率达成率分三档，映射到三个原生色（不再是连续渐变）：
+ * 接近满帧 -> 绿，轻微掉帧 -> 蓝，明显卡顿 -> 红。
+ * 阈值是先按经验定的，觉得档位切早/切晚了就调这两个常量。 */
+#define PERF_GOOD_PCT   90
+#define PERF_MID_PCT    70
+
+#define WINDOW_US   (10 * 1000000LL)   /* 进游戏后亮的时长 */
 
 static led_strip_handle_t s_strip;
+static int64_t s_window_start;
+static bool    s_window_open;   /* 窗口结束后置 false，避免每秒重复刷"灭" */
 
-static void rainbow_task(void *arg)
+esp_err_t rgb_led_init(void)
 {
-    uint16_t hue = 0;
-    uint8_t breath_phase = 0;
-    uint8_t audio_env = 0;
-    while (1) {
-        /* 先生成 0..255..0 的三角相位，再平方做近似 gamma 校正。
-         * 肉眼对暗部更敏感，平方后会缓慢亮起、自然熄灭，不会像线性三角波
-         * 那样在最亮点看出明显折返。完整一次呼吸约 5.1 秒。 */
-        uint16_t half_phase = breath_phase < BREATH_STEPS / 2
-                            ? breath_phase
-                            : BREATH_STEPS - 1 - breath_phase;
-        uint16_t ramp = (half_phase * 255 + 31) / 63;
-        uint32_t curved = (uint32_t)ramp * ramp;
-        uint8_t value = BREATH_MIN +
-            (curved * (BREATH_MAX - BREATH_MIN) + 32512) / 65025;
+    /* 每次进游戏都重新打开 10 秒窗口，不管硬件是不是已经初始化过。 */
+    s_window_start = esp_timer_get_time();
+    s_window_open  = true;
 
-        /* 音效联动：峰值幅度（0~32767）压到 0~255，叠在呼吸亮度上面。
-         * 一开始做的是「秒起、匀速落」，实测跟着 8-bit 音乐逐帧的音量
-         * 抖动一起闪，很晃眼。改成单极点低通对涨落都做平滑——每 tick
-         * 只往目标值走 1/8，时间常数约 8 tick（~320ms），看起来是连续
-         * 的呼吸感而不是逐帧闪烁。没有音频活动时目标一直是 0，几百毫秒
-         * 后 audio_env 收敛到 0，等于没这层东西。 */
-        uint8_t peak_255 = (uint8_t)(audio_output_take_peak() >> 7);
-        audio_env = (uint8_t)(audio_env +
-            (((int16_t)peak_255 - (int16_t)audio_env) >> AUDIO_SMOOTH_SHIFT));
-        uint16_t boosted = value + (uint32_t)audio_env * AUDIO_BOOST_MAX / 255;
-        value = boosted > 255 ? 255 : (uint8_t)boosted;
-
-        esp_err_t err = led_strip_set_pixel_hsv(s_strip, 0, hue, 255, value);
-        if (err == ESP_OK) err = led_strip_refresh(s_strip);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "彩虹刷新失败：%s", esp_err_to_name(err));
-            break;
-        }
-
-        hue = (hue + 2) % 360;       /* 色相一圈约 7.2 秒，不和呼吸周期重合 */
-        breath_phase = (breath_phase + 1) % BREATH_STEPS;
-        vTaskDelay(pdMS_TO_TICKS(EFFECT_TICK_MS));
-    }
-
-    led_strip_clear(s_strip);
-    led_strip_del(s_strip);
-    s_strip = NULL;
-    vTaskDelete(NULL);
-}
-
-esp_err_t rgb_led_start_rainbow(void)
-{
     if (s_strip) return ESP_OK;
 
     led_strip_config_t strip_config = {
@@ -99,18 +77,43 @@ esp_err_t rgb_led_start_rainbow(void)
         return err;
     }
 
-    BaseType_t created = xTaskCreatePinnedToCore(
-        rainbow_task, "rgb_rainbow", 2048, NULL, tskIDLE_PRIORITY + 1,
-        NULL, 0);
-    if (created != pdPASS) {
-        led_strip_del(s_strip);
-        s_strip = NULL;
-        ESP_LOGE(TAG, "彩虹任务创建失败");
-        return ESP_ERR_NO_MEM;
+    ESP_LOGI(TAG, "GPIO%d 开局帧率状态灯已启动（亮度封顶 %d/255，亮 %lld 秒）",
+             RGB_LED_GPIO, STATUS_VALUE, WINDOW_US / 1000000);
+    return ESP_OK;
+}
+
+void rgb_led_report_perf(int percent)
+{
+    if (!s_strip) return;
+
+    if (esp_timer_get_time() - s_window_start >= WINDOW_US) {
+        if (!s_window_open) return;   /* 已经灭过了，不用每秒重复刷 */
+        s_window_open = false;
+        esp_err_t err = led_strip_clear(s_strip);
+        if (err == ESP_OK) err = led_strip_refresh(s_strip);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "状态灯熄灭失败：%s", esp_err_to_name(err));
+        }
+        return;
     }
 
-    ESP_LOGI(TAG, "GPIO%d 幻彩呼吸已启动（亮度 %d~%d/255，呼吸约 5.1 秒，"
-                  "音效联动叠加最多 +%d）",
-             RGB_LED_GPIO, BREATH_MIN, BREATH_MAX, AUDIO_BOOST_MAX);
-    return ESP_OK;
+    uint16_t hue = percent >= PERF_GOOD_PCT ? 120   /* 绿：接近满帧 */
+                 : percent >= PERF_MID_PCT  ? 240   /* 蓝：轻微掉帧 */
+                 :                            0;    /* 红：明显卡顿 */
+    esp_err_t err = led_strip_set_pixel_hsv(s_strip, 0, hue, 255, STATUS_VALUE);
+    if (err == ESP_OK) err = led_strip_refresh(s_strip);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "状态灯刷新失败：%s", esp_err_to_name(err));
+    }
+}
+
+void rgb_led_off(void)
+{
+    if (!s_strip) return;
+    s_window_open = false;
+    esp_err_t err = led_strip_clear(s_strip);
+    if (err == ESP_OK) err = led_strip_refresh(s_strip);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "状态灯熄灭失败：%s", esp_err_to_name(err));
+    }
 }

@@ -297,10 +297,14 @@ static void blit_frame(uint8_t *vidbuf)
     /* ---- 每秒报一次 ---- */
     s_frames++;
     if (now - s_stat_t0 >= 1000000) {
-        int   fps  = (int)(s_frames * 1000000LL / (now - s_stat_t0));
-        float per  = (float)s_emu_us / 1000.0f / s_frames;
+        int   fps      = (int)(s_frames * 1000000LL / (now - s_stat_t0));
+        float per      = (float)s_emu_us / 1000.0f / s_frames;
+        int   headroom = 100 - (int)(s_emu_us * 100 / (now - s_stat_t0));
         printf("NES %d fps  (模拟+转换 %.1f ms/帧，CPU 余量 %d%%)\n",
-               fps, per, 100 - (int)(s_emu_us * 100 / (now - s_stat_t0)));
+               fps, per, headroom);
+        int target_fps = 1000000 / s_frame_period_us;
+        int fps_pct = fps * 100 / target_fps;
+        rgb_led_report_perf(fps_pct > 100 ? 100 : fps_pct);
         s_frames  = 0;
         s_emu_us  = 0;
         s_stat_t0 = now;
@@ -414,9 +418,9 @@ esp_err_t nes_emu_run(const rom_store_entry_t *entry)
 
     /* 到这里 ROM、mapper 和视频缓冲都已就绪，游戏确定能启动后再亮灯。
      * RGB 失败不影响模拟器主路径，只记日志继续运行。 */
-    esp_err_t rgb_err = rgb_led_start_rainbow();
+    esp_err_t rgb_err = rgb_led_init();
     if (rgb_err != ESP_OK) {
-        ESP_LOGW(TAG, "板载 RGB 彩虹效果未启动：%s",
+        ESP_LOGW(TAG, "板载 RGB 状态灯未启动：%s",
                  esp_err_to_name(rgb_err));
     }
 
@@ -471,7 +475,10 @@ esp_err_t nes_emu_run(const rom_store_entry_t *entry)
             raw &= ~EXIT_COMBO_BITS;
             int64_t now = esp_timer_get_time();
             if (exit_hold_t0 == 0) exit_hold_t0 = now;
-            if (now - exit_hold_t0 >= EXIT_HOLD_US) esp_restart();
+            if (now - exit_hold_t0 >= EXIT_HOLD_US) {
+                rgb_led_off();
+                esp_restart();
+            }
         } else {
             exit_hold_t0 = 0;
         }

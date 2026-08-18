@@ -317,7 +317,7 @@ esp_err_t genesis_emu_run(const rom_store_entry_t *entry)
     input_serial_init();
     input_usb_init();
     input_gamepad_init();
-    rgb_led_start_rainbow();
+    rgb_led_init();
 
     ESP_LOGI(TAG,
              "retro-go Gwenesis 启动：%s，%s，单核，显示每 %u 帧取 1 帧，音频 %u Hz",
@@ -346,7 +346,10 @@ esp_err_t genesis_emu_run(const rom_store_entry_t *entry)
             keys &= ~EXIT_COMBO_BITS;
             int64_t now = esp_timer_get_time();
             if (exit_hold_t0 == 0) exit_hold_t0 = now;
-            if (now - exit_hold_t0 >= EXIT_HOLD_US) esp_restart();
+            if (now - exit_hold_t0 >= EXIT_HOLD_US) {
+                rgb_led_off();
+                esp_restart();
+            }
         } else {
             exit_hold_t0 = 0;
         }
@@ -389,12 +392,15 @@ esp_err_t genesis_emu_run(const rom_store_entry_t *entry)
 
         int64_t now = esp_timer_get_time();
         if (now - stat_at >= 1000000) {
+            int headroom = 100 - (int)(emu_total * 100 / (now - stat_at));
             ESP_LOGI(TAG,
-                     "模拟 %u fps / 显示 %u fps，平均 %.1f ms/帧，画面变化 %u 次，校验 %08lx，内部空闲 %u KB",
+                     "模拟 %u fps / 显示 %u fps，平均 %.1f ms/帧，CPU 余量 %d%%，画面变化 %u 次，校验 %08lx，内部空闲 %u KB",
                      frames, presented,
                      frames ? (double)emu_total / frames / 1000.0 : 0.0,
-                     changed, (unsigned long)previous_hash,
+                     headroom, changed, (unsigned long)previous_hash,
                      (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
+            int fps_pct = presented * 100 / refresh;
+            rgb_led_report_perf(fps_pct > 100 ? 100 : fps_pct);
             frames = presented = changed = 0;
             emu_total = 0;
             stat_at = now;
