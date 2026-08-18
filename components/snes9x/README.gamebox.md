@@ -30,6 +30,16 @@
 这份核心砍掉了几个协处理器，**卡带能被识别、能加载、就是跑不动**，
 表现不是报错而是黑屏或停在 logo，很容易误判成性能问题。
 
+被砍的是 Retro-Go 干的，**不是上游 snes9x2005 没有**。拿
+`libretro/snes9x2005` 的 `source/` 和本目录 `src/` 比对，上游多出这些文件：
+
+```
+fxemu.c  fxemu.h  fxinst.c  fxinst.h      ← Super FX / GSU
+sa1.c  sa1.h  sa1cpu.c                    ← SA-1
+sdd1.c  sdd1.h  sdd1emu.c  sdd1emu.h      ← S-DD1
+spc7110*  seta*  dsp1*/dsp2/dsp4  cheats*
+```
+
 | 芯片 | 状态 | 依据 |
 |---|---|---|
 | DSP-1/2/3/4 | ✅ 有实现 | `dsp.c`（DSP-1 已在板上实测，见下） |
@@ -48,8 +58,26 @@
 是 65816 在空转等一个永远不来的 GSU 应答。看到「fps 满、余量大、画面不动」
 就该往这里想，别去调跳帧或内存布局。
 
-要补的话得从上游 snes9x 移植 `fxemu.c`/`fxinst.c`，代价是破坏
-「`src/` 一个字节都没改、上游可直接覆盖」这条约定，且 app 分区只剩 126 KB。
+**补回来不是把文件拷贝回来那么简单**，因为 Retro-Go 顺手把钩子也拆了。
+最关键的是 `cpuexec.c`：上游（这段继承自 CATSFC）按整帧用到的芯片在
+`S9xMainLoop_{SA1,NoSA1}_{SFX,NoSFX}` 四套主循环里选一套，为的就是省掉
+每条指令上的 `Settings.SuperFX` / `SA1.Executing` 判断——本目录只保留了
+`NoSA1_NoSFX` 那一条。所以恢复 Super FX 等于部分回退 Retro-Go 的提速改造，
+还要把散在 `memmap.c` / `getset.c` / `gfx.c` / `tile.c` 里的 GSU 钩子接回去。
+和上游同名文件的纯内容分歧（先 `tr -d '\r'` 去掉 CRLF 再 diff）合计 9097 行，
+其中 `memmap.c` 2410 行、`cpuexec.c` 587 行、`gfx.c` 405 行。
+代价还包括破坏「`src/` 一个字节都没改、上游可直接覆盖」这条约定。
+
+**体积不是障碍**：`fxemu.c` 7.7 KB + `fxinst.c` 70 KB + 两个头文件 11 KB
+≈ 89 KB 源码；app 分区为 Genesis 扩到 2 MB 之后，当前固件 1.46 MiB、
+还剩 548 KiB。（此处原先写「app 分区只剩 126 KB」，那是 app 还是 1 MB
+时的数据，扩容后已失效。）
+
+**但性能上没戏，别做。** Super FX 游戏里 GSU 才是主力——多边形/位图是它
+渲染进 RAM 的，65816 反而在等它。Star Fox 的 GSU 跑 10.7 MHz、Yoshi's
+Island 的 GSU-2 跑 21.4 MHz，等于在一颗已经只能跑到 45/60 fps 的 65816
+之外再全速模拟一颗更忙的处理器。SA-1 同理（本身就是 10.74 MHz 的 65816）。
+下面「到不了可玩状态」的结论对这些卡带只会更成立。
 
 ## 性能实测（ESP32-S3 @240MHz）
 
