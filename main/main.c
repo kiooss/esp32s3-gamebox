@@ -104,41 +104,38 @@ static void screen_diagnostic(void)
 }
 #endif
 
-/* 平台色块用的颜色和 rom_menu.c 的 system_color() 保持一致（RED=NES /
- * MAGENTA=SNES / GREEN=GB / YELLOW=GBC / BLUE=Genesis），两个画面看到的
- * 颜色含义是同一套，不用各自重新学一遍。splash_strip 和 boot_menu_strip
- * 共用这部分（标题/副标题/平台色块/上下分割线），只有分割线下方的内容
- * 不一样，所以拆出来避免抄两份。 */
+/* 经典 GAMEBOY DMG 绿色 4 阶（C_GB0..C_GB3，见 display.h），不是中性
+ * 灰阶——参照真实一代机屏幕的浅黄绿底色。背景 C_GB0，标题/正文用最深
+ * 的 C_GB3 压对比度，次要信息（副标题、分割线、平台色块）用 C_GB2，
+ * 比背景深但不抢标题。平台色块以前是每个系统一个专属色、和 rom_menu.c
+ * 的 system_color() 对应，改这套配色后没法再用色相区分五个系统，就
+ * 统一用 C_GB2——标签文字本身已经写明系统名，颜色只是点缀不是必需信息。
+ * splash_strip 和 boot_menu_strip 共用这部分（标题/副标题/平台色块/
+ * 上下分割线），只有分割线下方的内容不一样，所以拆出来避免抄两份。 */
 static void splash_frame_common(void)
 {
-    display_clear(C_BLACK);
-    display_rect(0, 0, DISP_FB_W, DISP_FB_H, C_GRAY);
+    display_clear(C_GB0);
+    display_rect(0, 0, DISP_FB_W, DISP_FB_H, C_GB2);
 
-    display_text(81, 40, "GAMEBOX", C_WHITE, 3);
-    display_text(96, 70, "ESP32-S3  5-IN-1", C_GRAY, 1);
+    display_text(81, 40, "GAMEBOX", C_GB3, 3);
+    display_text(96, 70, "ESP32-S3  5-IN-1", C_GB2, 1);
 
-    display_hline(24, 94, DISP_FB_W - 48, C_GRAY);
+    display_hline(24, 94, DISP_FB_W - 48, C_GB2);
 
-    static const struct { const char *label; uint16_t color; } systems[] = {
-        { "[NES]",  C_RED },
-        { "[SNES]", C_MAGENTA },
-        { "[GB]",   C_GREEN },
-        { "[GBC]",  C_YELLOW },
-        { "[MD]",   C_BLUE },
-    };
+    static const char *systems[] = { "[NES]", "[SNES]", "[GB]", "[GBC]", "[MD]" };
     int x = 64;
     for (size_t i = 0; i < sizeof(systems) / sizeof(systems[0]); i++) {
-        display_text(x, 112, systems[i].label, systems[i].color, 1);
-        x += (int)strlen(systems[i].label) * 6 + 4;
+        display_text(x, 112, systems[i], C_GB2, 1);
+        x += (int)strlen(systems[i]) * 6 + 4;
     }
 
-    display_hline(24, 136, DISP_FB_W - 48, C_GRAY);
+    display_hline(24, 136, DISP_FB_W - 48, C_GB2);
 }
 
 static void splash_strip(uint16_t *strip, int y0, int h, void *ctx)
 {
     splash_frame_common();
-    display_text(114, 176, "loading...", C_GRAY, 1);
+    display_text(114, 176, "loading...", C_GB2, 1);
 }
 
 static void splash(void)
@@ -167,10 +164,10 @@ static void boot_menu_strip(uint16_t *strip, int y0, int h, void *ctx)
 
     for (int i = 0; i < 2; i++) {
         if (i == *selected) {
-            display_fill_rect(x - 6, y - 3, word_w + 12, 7 * 2 + 6, C_CYAN);
-            display_text(x, y, labels[i], C_BLACK, 2);
+            display_fill_rect(x - 6, y - 3, word_w + 12, 7 * 2 + 6, C_GB2);
+            display_text(x, y, labels[i], C_GB0, 2);
         } else {
-            display_text(x, y, labels[i], C_GRAY, 2);
+            display_text(x, y, labels[i], C_GB2, 2);
         }
         x += word_w + gap;
     }

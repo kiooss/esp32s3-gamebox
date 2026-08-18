@@ -124,6 +124,18 @@
 #define C_MAGENTA RGB565(255, 0,   255)
 #define C_GRAY    RGB565(128, 128, 128)
 
+/* 经典 GAMEBOY DMG 4 阶浅黄绿配色（真实一代机屏幕的颜色，不是中性灰）——
+ * 开机画面和游戏选择画面专用（main.c splash_frame_common()/
+ * boot_menu_strip()、rom_menu.c draw_strip()），别处仍按需混用上面那些
+ * 彩色常量。数值是社区公认的 DMG 硬件调色板（Wikipedia "List of Game
+ * Boy hardware palettes" DMG 一行），跟 components/gnuboy 里
+ * GB_PALETTE_DMG 是同一套配色，但那边内部走的是 BGR555 编码、没法直接
+ * 抠数值出来复用，这里用 RGB565() 重新定义。C_GB0 最浅、C_GB3 最深。 */
+#define C_GB0 RGB565(155, 188, 15)
+#define C_GB1 RGB565(139, 172, 15)
+#define C_GB2 RGB565(48,  98,  48)
+#define C_GB3 RGB565(15,  56,  15)
+
 /* 初始化 SPI + 面板 + 背光，分配两块可覆盖整屏宽度的条带缓冲，
  * 并在核 1 上起一个推屏任务。 */
 esp_err_t display_init(void);

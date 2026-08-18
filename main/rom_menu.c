@@ -52,7 +52,6 @@ static const char *TAG = "menu";
 #define BRIGHT_X       200
 #define HL_PAD         2       /* 反白块比文字左右各多出这么多 */
 #define LINE_CHARS_MAX ((DISP_FB_W - TEXT_X) / 6)
-#define C_DIVIDER      RGB565(48, 48, 48)
 
 #define POLL_MS     16      /* 约 60 Hz，和游戏帧率一个量级 */
 
@@ -71,14 +70,8 @@ typedef struct {
     int visible_count;
     int volume;
     int backlight;
-    rom_system_t systems[PAGE_ROWS];
     char lines[PAGE_ROWS][64];
 } draw_args_t;
-
-/* 每行固定排版："NN " + 4 字符平台徽标 + " 名字"，徽标前后的字符数固定，
- * 拆分着色时按字节切这两个位置就行，不用重新格式化。 */
-#define ROW_NUM_LEN     3
-#define ROW_BADGE_LEN   4
 
 /* 一律补到 4 字符宽：加了 SNES 之后名字列才还能对齐成一竖条。 */
 static const char *system_name(rom_system_t system)
@@ -90,17 +83,6 @@ static const char *system_name(rom_system_t system)
     return "NES ";
 }
 
-/* 给每个平台一个专属颜色，不重复选中态用的青色。列表按平台分组排列
- * （见 tools/pack_roms.py），配色让分组边界不用数字也能一眼看出来。 */
-static uint16_t system_color(rom_system_t system)
-{
-    if (system == ROM_SYSTEM_SNES)     return C_MAGENTA;
-    if (system == ROM_SYSTEM_GENESIS)  return C_BLUE;
-    if (system == ROM_SYSTEM_GBC)      return C_YELLOW;
-    if (system == ROM_SYSTEM_GB)       return C_GREEN;
-    return C_RED;   /* NES */
-}
-
 static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
 {
     const draw_args_t *a = ctx;
@@ -110,57 +92,51 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
     int first = a->first;
     int last = first + a->visible_count;
 
-    display_clear(C_BLACK);
+    /* 经典 GAMEBOY DMG 绿色 4 阶（C_GB0..C_GB3，见 display.h），不是
+     * 中性灰阶。背景 C_GB0（浅黄绿），标题/正文用最深的 C_GB3 压对比度，
+     * 次要信息用 C_GB2。C_GB0 只留给深色块上的反白字——直接铺在浅色
+     * 背景上对比度太弱，会糊。
+     *
+     * 以前平台徽标按系统分别上色，四阶配色里塞不下五种色相的区分度，
+     * 干脆统一交给行文字本身（"NES "/"SNES" 这些缩写已经写明系统），
+     * 不再拆分着色，一整行一次画完就够。 */
+    display_clear(C_GB0);
 
-    display_text(TEXT_X, TITLE_Y, "游戏选择", C_CYAN, 1);
+    display_text(TEXT_X, TITLE_Y, "游戏选择", C_GB3, 1);
     char vol_text[16];
     snprintf(vol_text, sizeof(vol_text), "声音:%d", a->volume);
-    display_text(SOUND_X, PAGE_Y, vol_text,
-                 a->volume == 0 ? C_GRAY : C_GREEN, 1);
+    display_text(SOUND_X, PAGE_Y, vol_text, C_GB2, 1);
     char bl_text[16];
     snprintf(bl_text, sizeof(bl_text), "亮度:%d", a->backlight);
-    display_text(BRIGHT_X, PAGE_Y, bl_text, C_YELLOW, 1);
+    display_text(BRIGHT_X, PAGE_Y, bl_text, C_GB2, 1);
 
     char page_text[32];
     snprintf(page_text, sizeof(page_text), "%d/%d", page + 1, page_count);
     int page_x = DISP_FB_W - TEXT_X - (int)strlen(page_text) * 6;
-    display_text(page_x, PAGE_Y, page_text, C_WHITE, 1);
+    display_text(page_x, PAGE_Y, page_text, C_GB3, 1);
     display_fill_rect(TEXT_X, HEADER_LINE_Y, DISP_FB_W - 2 * TEXT_X, 1,
-                      C_DIVIDER);
+                      C_GB2);
 
     for (int i = first; i < last; i++) {
         int y = LIST_Y + (i - first) * ROW_H;
         const char *line = a->lines[i - first];
 
         if (i == sel) {
-            /* 反白：先铺一条青色块，再在上面写黑字。
-             * 块宽铺满画布，这样长短不一的名字看着也是整齐一条。选中态
-             * 已经用青色块够醒目了，行内文字不再按平台区分颜色。 */
+            /* 反白：铺一条 C_GB2 块，再在上面写 C_GB0 字——不用最深的
+             * C_GB3 是嫌太重，C_GB2 对比度也够。块宽铺满画布，这样
+             * 长短不一的名字看着也是整齐一条。 */
             display_fill_rect(TEXT_X - HL_PAD, y - 1,
                               DISP_FB_W - 2 * (TEXT_X - HL_PAD), ROW_H - 1,
-                              C_CYAN);
-            display_text(TEXT_X, y, line, C_BLACK, 1);
+                              C_GB2);
+            display_text(TEXT_X, y, line, C_GB0, 1);
         } else {
-            /* 按固定列宽拆成三段，只给平台徽标上色，序号和名字仍是灰色——
-             * 分组已经靠 pack_roms.py 的排序聚拢，颜色只是加一层辨识度。 */
-            char num[ROW_NUM_LEN + 1];
-            char badge[ROW_BADGE_LEN + 1];
-            memcpy(num, line, ROW_NUM_LEN);
-            num[ROW_NUM_LEN] = '\0';
-            memcpy(badge, line + ROW_NUM_LEN, ROW_BADGE_LEN);
-            badge[ROW_BADGE_LEN] = '\0';
-
-            display_text(TEXT_X, y, num, C_GRAY, 1);
-            display_text(TEXT_X + ROW_NUM_LEN * 6, y, badge,
-                         system_color(a->systems[i - first]), 1);
-            display_text(TEXT_X + (ROW_NUM_LEN + ROW_BADGE_LEN) * 6, y,
-                         line + ROW_NUM_LEN + ROW_BADGE_LEN, C_GRAY, 1);
+            display_text(TEXT_X, y, line, C_GB2, 1);
         }
     }
 
     display_fill_rect(TEXT_X, FOOTER_LINE_Y, DISP_FB_W - 2 * TEXT_X, 1,
-                      C_DIVIDER);
-    display_text(38, FOOTER_Y, "A开始  B声音  Y亮度  左右翻页", C_GRAY, 1);
+                      C_GB2);
+    display_text(38, FOOTER_Y, "A开始  B声音  Y亮度  左右翻页", C_GB2, 1);
 }
 
 /* ctx 指向栈上的 draw_args_t，所以必须用 sync 版本等推完再返回。 */
@@ -184,7 +160,6 @@ static void draw(int count, int sel)
         /* ROM 目录位于 flash mmap，格式化也会使用较深的 libc 调用栈。都在
          * 菜单任务里先完成，核 1 的推屏回调只读取这份栈上快照，避免长列表
          * 页面令 3 KB 推屏任务栈承受目录访问和 snprintf。 */
-        a.systems[i - a.first] = e->system;
         char *line = a.lines[i - a.first];
         snprintf(line, sizeof(a.lines[0]), "%02d %s %s", i + 1,
                  system_name(e->system), e->name);
