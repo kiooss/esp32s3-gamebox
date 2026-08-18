@@ -206,17 +206,25 @@ static void backlight_init(void)
     ESP_ERROR_CHECK(ledc_channel_config(&c));
 }
 
+static int s_backlight_pct = 100;
+
 void display_backlight(int percent)
 {
     if (DISP_PIN_BL < 0) return;
     if (percent < 0)   percent = 0;
     if (percent > 100) percent = 100;
+    s_backlight_pct = percent;
 
     /* 10 位分辨率下满亮是 1024 而不是 1023 —— 用 1023 会让每个 PWM 周期
      * 留一个 1/1024 的熄灭窗口，虽然 5kHz 下肉眼基本看不出，但那不是真正的常亮。 */
     uint32_t duty = (1024 * percent) / 100;
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+}
+
+int display_get_backlight(void)
+{
+    return s_backlight_pct;
 }
 
 esp_err_t display_init(void)

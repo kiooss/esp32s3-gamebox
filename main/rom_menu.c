@@ -45,7 +45,11 @@ static const char *TAG = "menu";
 #define FOOTER_LINE_Y  204
 #define FOOTER_Y       207
 #define TEXT_X         8       /* 文字左缩进 */
-#define SOUND_X        184     /* `声音:开/关` 右边仍给页码留足空间 */
+/* 声音/亮度两个指示器紧挨着排在标题行右侧，右边仍要给页码（"d/d"，18px）
+ * 留空间。中文字形 17px/字，数字 6px/字，两个指示器最长都是 "X度:100"
+ * 那种 4 字 58px，中间留 6px 间距，算下来 BRIGHT_X 结尾正好卡在页码前。 */
+#define SOUND_X        136
+#define BRIGHT_X       200
 #define HL_PAD         2       /* 反白块比文字左右各多出这么多 */
 #define LINE_CHARS_MAX ((DISP_FB_W - TEXT_X) / 6)
 #define C_DIVIDER      RGB565(48, 48, 48)
@@ -66,6 +70,7 @@ typedef struct {
     int first;
     int visible_count;
     int volume;
+    int backlight;
     rom_system_t systems[PAGE_ROWS];
     char lines[PAGE_ROWS][64];
 } draw_args_t;
@@ -112,6 +117,9 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
     snprintf(vol_text, sizeof(vol_text), "声音:%d", a->volume);
     display_text(SOUND_X, PAGE_Y, vol_text,
                  a->volume == 0 ? C_GRAY : C_GREEN, 1);
+    char bl_text[16];
+    snprintf(bl_text, sizeof(bl_text), "亮度:%d", a->backlight);
+    display_text(BRIGHT_X, PAGE_Y, bl_text, C_YELLOW, 1);
 
     char page_text[32];
     snprintf(page_text, sizeof(page_text), "%d/%d", page + 1, page_count);
@@ -152,7 +160,7 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
 
     display_fill_rect(TEXT_X, FOOTER_LINE_Y, DISP_FB_W - 2 * TEXT_X, 1,
                       C_DIVIDER);
-    display_text(68, FOOTER_Y, "A开始  B声音  左右翻页", C_GRAY, 1);
+    display_text(38, FOOTER_Y, "A开始  B声音  Y亮度  左右翻页", C_GRAY, 1);
 }
 
 /* ctx 指向栈上的 draw_args_t，所以必须用 sync 版本等推完再返回。 */
@@ -163,6 +171,7 @@ static void draw(int count, int sel)
         .sel = sel,
         .first = (sel / PAGE_ROWS) * PAGE_ROWS,
         .volume = audio_output_get_volume(),
+        .backlight = display_get_backlight(),
     };
 
     int last = a.first + PAGE_ROWS;
@@ -219,6 +228,20 @@ bool rom_menu_pick(const rom_store_entry_t **entry, uint16_t *launch_keys)
             int volume = audio_output_get_volume() + 10;
             if (volume > 100) volume = 0;
             audio_output_set_volume(volume);
+            draw(count, sel);
+            continue;
+        }
+
+        /* Y 同理调背光，10% 一档循环，最暗 5%——不设到 0 是不想让屏幕
+         * 全黑（那样看不见菜单，没法确认调到哪一档了）。100% 那档单独
+         * 钳位，不然 95+10=105 会直接跳过 100 冲到下一轮的 5%。
+         * 不用 SELECT 是想把它留给以后可能加的系统级组合键（比如
+         * SELECT+START 长按待机）。 */
+        if (edge & GAMEPAD_BIT_Y) {
+            int backlight = display_get_backlight();
+            backlight = (backlight >= 100) ? 5 : backlight + 10;
+            if (backlight > 100) backlight = 100;
+            display_backlight(backlight);
             draw(count, sel);
             continue;
         }

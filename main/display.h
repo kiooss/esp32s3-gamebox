@@ -163,6 +163,9 @@ void display_wait_idle(void);
 /* 背光亮度 0~100。BL 脚接 3V3 常亮时此函数无效果。 */
 void display_backlight(int percent);
 
+/* 当前背光百分比（display_backlight() 最后一次设的值，默认 100）。 */
+int display_get_backlight(void);
+
 /* ---- 基本绘图 ----
  *
  * ⚠ 只能在 disp_strip_fn 回调**内部**调用 —— 它们画的是「当前条带」。
