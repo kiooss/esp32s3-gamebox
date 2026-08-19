@@ -33,12 +33,25 @@ file(GLOB_RECURSE ROM_FILES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/roms/*.bin"
     "${CMAKE_SOURCE_DIR}/roms/*.zip")
 
+# 光把 ROM 当依赖只能覆盖「新增/修改」。**删掉**一个 ROM 不会重新打包：
+# ninja 的判据是「有没有输入比输出新」，而删掉一个输入之后 roms.bin 比剩下
+# 每一个输入都新，于是被判定最新——被删的游戏原样留在镜像里，烧进去菜单上
+# 照样有，选中会读到错位的数据。实测确认过（删文件后 ninja 报 no work to do）。
+#
+# 所以把文件列表本身也写成一个文件当依赖：列表一变（增、删、改名都算）它就
+# 变，roms.bin 跟着重打。file(CONFIGURE) 内容相同时不改写、不动 mtime，所以
+# 不会每次构建都白打包一次。
+set(ROMS_LIST "${CMAKE_BINARY_DIR}/roms_list.txt")
+string(REPLACE ";" "\n" ROMS_LIST_TEXT "${ROM_FILES}")
+file(CONFIGURE OUTPUT "${ROMS_LIST}" CONTENT "${ROMS_LIST_TEXT}\n")
+
 add_custom_command(
     OUTPUT "${ROMS_IMAGE}"
     COMMAND ${CMAKE_COMMAND} -E echo "打包 ROM 镜像..."
     COMMAND python3 "${CMAKE_SOURCE_DIR}/tools/pack_roms.py"
                     "${CMAKE_SOURCE_DIR}/roms" "${ROMS_IMAGE}"
-    DEPENDS ${ROM_FILES} "${CMAKE_SOURCE_DIR}/tools/pack_roms.py"
+    DEPENDS ${ROM_FILES} "${ROMS_LIST}"
+            "${CMAKE_SOURCE_DIR}/tools/pack_roms.py"
     COMMENT "生成 ROM 分区镜像"
     VERBATIM)
 
