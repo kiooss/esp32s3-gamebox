@@ -155,7 +155,8 @@ malloc 一块内部缓冲再 memcpy —— 数据最后照样落在内部 RAM，
 
 ### 换 ROM
 
-日常游戏库放在顶层 `roms/`：支持 `.nes`、`.gb`、`.gbc`、`.sfc`、`.smc`、`.md`、`.bin`。运行
+日常游戏库放在顶层 `roms/`：支持 `.nes`、`.gb`、`.gbc`、`.sfc`、`.smc`、`.md`、`.bin`，
+以及装着其中一个的 `.zip`（自动取出，显示名用 zip 内部那个文件名）。运行
 `idf.py build` 会把每个游戏独立压成 raw Deflate 并生成 `build/roms.bin`，再用
 `idf.py flash-roms` 单独烧入。开机菜单只读取目录；确认游戏后才把选中的一份解到
 PSRAM，其他游戏不占运行内存。换游戏仍按板子 RST 重启，避免在模拟器之间留下状态。

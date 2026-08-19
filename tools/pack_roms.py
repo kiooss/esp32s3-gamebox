@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """把 roms/ 下的 NES / GB / GBC / SNES / Genesis 游戏打包进 roms 分区。
 
+裸 ROM 和 .zip 都收：zip 里恰好有一个可识别 ROM 时自动取出来（显示名用
+zip 内部的文件名），否则打一行提示跳过。
+
 镜像格式（小端，和 ESP32 一致）：
 
     偏移 0    magic  "GBOXDFL\\0"        8 字节
@@ -27,6 +30,7 @@ import os
 import re
 import struct
 import sys
+import zipfile
 import zlib
 
 MAGIC = b"GBOXDFL\0"
@@ -55,6 +59,12 @@ SYSTEM_NAMES = {
 }
 
 EXTENSIONS = (".nes", ".gb", ".gbc", ".sfc", ".smc", ".md", ".bin")
+
+# .zip 会被拆开取出里面的 ROM；其余的只认得出来、提示一句让人先解压。
+# 之所以要认这些扩展名而不是直接无视：扫描阶段按扩展名过滤时，不认识的
+# 文件是**一点提示都没有**地消失的，人只会看到菜单里少一个游戏，根本
+# 想不到是扩展名的问题。宁可多打一行。
+ARCHIVE_EXTENSIONS = (".zip", ".7z", ".rar", ".gz", ".tar", ".tgz")
 
 # ROM 站惯例的标记：(U) (E) (Japan, USA) [!] [!p] (PRG0) 等等。
 # 显示名里不需要，剥掉。
@@ -174,9 +184,54 @@ def find_roms(rom_dir):
     for dirpath, dirnames, filenames in os.walk(rom_dir):
         dirnames[:] = [d for d in dirnames if not SKIP_DIR_RE.match(d)]
         paths += [os.path.join(dirpath, f) for f in filenames
-                  if f.lower().endswith(EXTENSIONS)]
+                  if f.lower().endswith(EXTENSIONS + ARCHIVE_EXTENSIONS)]
     # 排序键用文件名而不是完整路径：分不分子目录、怎么分，菜单里的顺序都不变。
     return sorted(paths, key=lambda p: (os.path.basename(p), p))
+
+
+# macOS 压缩时会塞进伴生文件，它们的扩展名和真 ROM 一模一样
+# （__MACOSX/._Foo.sfc），不滤掉就会被算成第二个候选、整个 zip 被判定
+# 「有 2 个 ROM」而跳过。
+def is_macos_junk(name):
+    return name.startswith("__MACOSX/") or os.path.basename(name).startswith("._")
+
+
+def read_zip_rom(path):
+    """从 zip 里取出唯一那个 ROM，返回 (内部文件名, 数据)；取不到返回 (None, None)。
+
+    显示名用 zip **内部**的文件名而不是 zip 自己的名字：库里的 zip 常是
+    `Contra_ The Alien Wars.zip` 这种——那个下划线是 macOS 把 `:` 转义来的，
+    内部名 `Contra - The Alien Wars (USA) (SGB Enhanced).gb` 干净得多，
+    而且这样 zip 和裸 ROM 走的是同一条 display_name() 路径。
+    """
+    shown = os.path.basename(path)
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = [n for n in zf.namelist()
+                     if not n.endswith("/")
+                     and not is_macos_junk(n)
+                     and n.lower().endswith(EXTENSIONS)]
+            if len(names) != 1:
+                why = ("里面没有可识别的 ROM" if not names else
+                       "里面有 %d 个 ROM，不猜用哪个" % len(names))
+                print("  忽略（%s）: %s" % (why, shown))
+                return None, None
+            return os.path.basename(names[0]), zf.read(names[0])
+    except (zipfile.BadZipFile, OSError) as exc:
+        print("  忽略（打不开: %s）: %s" % (exc, shown))
+        return None, None
+
+
+def read_rom(path):
+    """把一个路径读成 (用于判类型和显示的文件名, 数据)；读不了返回 (None, None)。"""
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".zip":
+        return read_zip_rom(path)
+    if ext in ARCHIVE_EXTENSIONS:
+        print("  忽略（%s 压缩包，请先解压）: %s" % (ext, os.path.basename(path)))
+        return None, None
+    with open(path, "rb") as fh:
+        return os.path.basename(path), fh.read()
 
 
 def main():
@@ -190,9 +245,10 @@ def main():
 
     roms = []
     for p in paths:
-        with open(p, "rb") as fh:
-            data = fh.read()
-        ext = os.path.splitext(p)[1].lower()
+        name, data = read_rom(p)
+        if data is None:
+            continue        # read_rom 已经把原因打出来了
+        ext = os.path.splitext(name)[1].lower()
         system = SYSTEM_NES if ext == ".nes" and ines_ok(data) else None
         if ext in (".gb", ".gbc"):
             system = gameboy_system(data)
@@ -202,10 +258,10 @@ def main():
         if ext in (".md", ".bin") and genesis_ok(data):
             system = SYSTEM_GENESIS
         if system is None:
-            print("  跳过（ROM 头无效）: %s" % os.path.basename(p))
+            print("  跳过（ROM 头无效）: %s" % name)
             continue
         codec, payload = compress_rom(data)
-        roms.append((display_name(p), data, payload, system, codec))
+        roms.append((display_name(name), data, payload, system, codec))
 
     if not roms:
         sys.exit("没有一个文件通过 ROM 头校验")
