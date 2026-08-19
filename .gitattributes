@@ -1,0 +1,4 @@
+# main/menu_font.c 是 tools/gen_menu_font.py 生成的 6800 行字形表（GB2312 全集）。
+# 标成 generated，GitHub 的 diff 和 PR 里会默认折叠，也不计入语言统计——
+# 否则一次重新生成就会淹掉整个 diff。要改字符集请改生成器，别手改这个文件。
+main/menu_font.c linguist-generated=true
