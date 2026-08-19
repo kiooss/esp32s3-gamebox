@@ -14,12 +14,16 @@ project(esp32s3-gamebox)
 # 或者手工：
 #   esptool.py write_flash 0x210000 build/roms.bin
 #
-# 没有做成 `idf.py flash` 的一部分 —— ROM 镜像当前约 10.61 MiB，烧一次仍要较久，
+# 没有做成 `idf.py flash` 的一部分 —— ROM 镜像当前约 6.8 MiB，烧一次仍要较久，
 # 每次改代码都重烧是白等。加了游戏才需要跑一次 flash-roms。
 set(ROMS_IMAGE "${CMAKE_BINARY_DIR}/roms.bin")
 # 所有扩展名都必须成为依赖；否则只替换 GB/GBC ROM 时，已有的 roms.bin
 # 会被误判为最新，flash-roms 烧进去的仍是旧镜像。
-file(GLOB ROM_FILES CONFIGURE_DEPENDS
+# GLOB_RECURSE：roms/ 已按平台分子目录（nes/ gb/ gbc/ snes/ md/），非递归的
+# GLOB 会一个都匹配不到，于是永远不重新打包——正是上面那句警告的情形。
+# 这里会连 removed-*/ 一起收进依赖，和 pack_roms.py 的跳过规则不一致，但无害：
+# 依赖只决定「要不要重打包」，装什么由 pack_roms.py 说了算，最多多打包一次。
+file(GLOB_RECURSE ROM_FILES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/roms/*.nes"
     "${CMAKE_SOURCE_DIR}/roms/*.gb"
     "${CMAKE_SOURCE_DIR}/roms/*.gbc"

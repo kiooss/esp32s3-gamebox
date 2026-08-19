@@ -163,16 +163,28 @@ def roms_partition_size():
     return None
 
 
+# roms/ 按平台分了子目录（nes/ gb/ gbc/ snes/ md/），所以要递归扫。但「不要的
+# 游戏」一直是挪进 removed-YYYYMMDD/ 而不是真删——递归之后那些会被重新收进来，
+# 所以这类目录整棵跳过。前缀 `_` 和 `.` 一并跳，留作临时存放的通用写法。
+SKIP_DIR_RE = re.compile(r"^(removed|_|\.)")
+
+
+def find_roms(rom_dir):
+    paths = []
+    for dirpath, dirnames, filenames in os.walk(rom_dir):
+        dirnames[:] = [d for d in dirnames if not SKIP_DIR_RE.match(d)]
+        paths += [os.path.join(dirpath, f) for f in filenames
+                  if f.lower().endswith(EXTENSIONS)]
+    # 排序键用文件名而不是完整路径：分不分子目录、怎么分，菜单里的顺序都不变。
+    return sorted(paths, key=lambda p: (os.path.basename(p), p))
+
+
 def main():
     if len(sys.argv) != 3:
         sys.exit(__doc__)
     rom_dir, out_path = sys.argv[1], sys.argv[2]
 
-    paths = sorted(
-        os.path.join(rom_dir, f)
-        for f in os.listdir(rom_dir)
-        if f.lower().endswith(EXTENSIONS)
-    )
+    paths = find_roms(rom_dir)
     if not paths:
         sys.exit("在 %s 里没找到 %s 文件" % (rom_dir, "/".join(EXTENSIONS)))
 
