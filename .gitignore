@@ -11,6 +11,9 @@ sdkconfig.old
 .claude/
 .DS_Store
 
+# pack_roms.py 被 CMake 反复调用，Python 会在 tools/ 里落 __pycache__
+tools/__pycache__/
+
 # ================== ROM ==================
 #
 # 版权物不入库。开头的 / 是必须的 —— 不带斜杠的 roms/ 会连 main/roms/ 一起匹配掉，
