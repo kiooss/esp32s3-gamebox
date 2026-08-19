@@ -104,6 +104,40 @@ def gameboy_system(data):
     return SYSTEM_GBC if data[0x143] in (0x80, 0xC0) else SYSTEM_GB
 
 
+# 卡带类型（头 0x147）-> gnuboy 会选哪个 mapper。照抄 components/gnuboy/
+# gnuboy.c 里那串 if/else，取值范围一致。
+GB_MBC_BY_TYPE = [
+    (range(1, 4),     "MBC1"),
+    (range(5, 7),     "MBC2"),
+    (range(11, 14),   "MMM01"),
+    (range(15, 20),   "MBC3"),
+    (range(25, 31),   "MBC5"),
+    (range(32, 33),   "MBC6"),
+    (range(34, 35),   "MBC7"),
+    (range(254, 255), "HuC3"),
+    (range(255, 256), "HuC1"),
+]
+
+# components/gnuboy/hw.c 的 mbc_write() 只给这几种写了 case。
+# gnuboy.c 认得出 MBC6/MBC7/MMM01，hw.c 里却没有对应分支、也没有 default，
+# 于是游戏写 bank 号时**什么都不会发生**，永远卡在第 1 个 bank——表现是黑屏，
+# 和崩溃、性能问题看着一模一样，极难判断。烧一次要好几分钟，与其烧完才发现，
+# 不如打包时就说清楚。实测触发过：Kirby Tilt 'n' Tumble（0x22，MBC7 + 加速度
+# 计），而且那游戏全靠倾斜卡带操作，就算补上 mapper 也没法玩。
+GB_MBC_SUPPORTED = {"ROM only", "MBC1", "MBC2", "MBC3", "MBC5", "HuC1", "HuC3"}
+
+
+def gameboy_mbc(data):
+    """返回 (mapper 名, gnuboy 是否实现)。"""
+    cart_type = data[0x147]
+    name = "ROM only"
+    for values, label in GB_MBC_BY_TYPE:
+        if cart_type in values:
+            name = label
+            break
+    return name, name in GB_MBC_SUPPORTED
+
+
 def snes_strip_copier_header(data):
     """老式拷贝机会在文件头加 512 字节。剥掉再打包，省得板子上再判一次。"""
     if len(data) % 0x400 == 512:
@@ -244,6 +278,7 @@ def main():
         sys.exit("在 %s 里没找到 %s 文件" % (rom_dir, "/".join(EXTENSIONS)))
 
     roms = []
+    unsupported = []
     for p in paths:
         name, data = read_rom(p)
         if data is None:
@@ -252,6 +287,10 @@ def main():
         system = SYSTEM_NES if ext == ".nes" and ines_ok(data) else None
         if ext in (".gb", ".gbc"):
             system = gameboy_system(data)
+            if system is not None:
+                mbc, supported = gameboy_mbc(data)
+                if not supported:
+                    unsupported.append((name, mbc, data[0x147]))
         if ext in (".sfc", ".smc"):
             data = snes_strip_copier_header(data)
             system = snes_ok(data)
@@ -307,6 +346,16 @@ def main():
         raw_total / 1048576, stored_total / 1048576,
         (raw_total - stored_total) / 1048576,
         (raw_total - stored_total) * 100 / raw_total))
+
+    # 放在最后而不是循环里：上面那串游戏清单有几十行，夹在中间会被刷过去。
+    # 只警告不拒绝——装不装是使用者的决定，脚本只负责让他事先知道。
+    if unsupported:
+        print()
+        print("⚠ 下面这些 GB/GBC 卡带用了 gnuboy 没实现的 mapper，"
+              "**烧进去会黑屏**：")
+        for name, mbc, cart_type in unsupported:
+            print("    %-40s 卡带类型 0x%02X = %s" % (name, cart_type, mbc))
+        print("  它们仍然打进了镜像。不想白烧就先从 roms/ 里挪走。")
 
     # 超了 esptool 也会报错，但在这里说清楚更好定位。
     # 容量从 partitions.csv 现读而不是写死：以前这里硬编码 8 MB，

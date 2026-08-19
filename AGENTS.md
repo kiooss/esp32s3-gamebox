@@ -100,7 +100,9 @@ GB/GBC（共用 `gbc_emu.c`）、Genesis 都已经改走 `display_stream_sized()
 
 - `roms/**/*.{nes,gb,gbc,sfc,smc,md,bin,zip}` → `tools/pack_roms.py` 打成自定义镜像
   （`.zip` 里恰好有一个可识别 ROM 时自动取出；0 个或多个都只打一行提示跳过。
-  不认识的扩展名和 `.7z`/`.rar` 同样会打提示——以前是静默消失，最难查）
+  不认识的扩展名和 `.7z`/`.rar` 同样会打提示——以前是静默消失，最难查。
+  GB/GBC 还会查 mapper：gnuboy 没实现 MBC6/MBC7/MMM01，那类卡带烧进去是黑屏，
+  打包时就警告，见 `components/gnuboy/README.gamebox.md`）
   （magic + 定长目录表 + 每个 ROM 独立 raw Deflate）
   → 烧进 `partitions.csv` 里 offset `0x210000` 的 13 MB `roms` 分区（子类型 0x40）。
   分区容量由 `pack_roms.py` 的 `roms_partition_size()` 现读 `partitions.csv`，
