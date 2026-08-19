@@ -354,6 +354,7 @@ bool rom_menu_pick(const rom_store_entry_t **entry, uint16_t *launch_keys)
         } else {
             /* ---- 游戏列表 ---- */
             const category_t *c = &cats[cat];
+            int page_count = (c->count + PAGE_ROWS - 1) / PAGE_ROWS;
 
             if (edge & NES_PAD_B) {
                 in_games = false;
@@ -372,12 +373,18 @@ bool rom_menu_pick(const rom_store_entry_t **entry, uint16_t *launch_keys)
                     return true;
                 }
 
-            } else if (edge & (NES_PAD_LEFT | NES_PAD_RIGHT)) {
+            } else if (page_count > 1 && (edge & (NES_PAD_LEFT | NES_PAD_RIGHT))) {
                 /* 左右直接翻一整页，并尽量保留当前行。最后一页不足 10 项时，
                  * 同一行不存在就落到最后一项；页首和页尾之间同样可以环绕。
-                 * 这一支单独走（而不是再判断上下），是为了让斜推摇杆时以
-                 * 翻页为准，避免同时又上下移动一格。 */
-                int page_count = (c->count + PAGE_ROWS - 1) / PAGE_ROWS;
+                 * 这一支排在上下之前单独走，是为了让斜推摇杆时以翻页为准，
+                 * 避免同时又上下移动一格。
+                 *
+                 * ⚠ `page_count > 1` 这个前置条件不能去掉。摇杆是模拟量，往上
+                 * 推很容易同时越过左/右阈值，这一帧的 edge 就是 UP|RIGHT。只有
+                 * 一页时翻页是空操作（(0±1+1)%1 == 0），但它排在前面会把上下
+                 * 吃掉——整个列表看着就像按键失灵。分平台之前列表是 31 个游戏
+                 * 铺 4 页，翻页总有事可做所以没暴露；拆成平台之后 GB/GBC/SNES
+                 * 都只有一页，全都中招。 */
                 int page = sel[cat] / PAGE_ROWS;
                 int row = sel[cat] % PAGE_ROWS;
                 int page_delta = (edge & NES_PAD_LEFT) ? -1 : +1;
