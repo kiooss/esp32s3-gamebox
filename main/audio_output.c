@@ -86,15 +86,26 @@ int audio_output_take_peak(void)
 void audio_output_submit_stereo(const int16_t *samples, size_t frame_count)
 {
     if (!s_queue || !samples || frame_count == 0) return;
-    if (frame_count > AUDIO_OUTPUT_MAX_FRAMES_PER_PACKET) {
-        frame_count = AUDIO_OUTPUT_MAX_FRAMES_PER_PACKET;
-    }
 
-    s_producer_packet.sample_count = frame_count;
-    memcpy(s_producer_packet.stereo, samples, frame_count * 2 * sizeof(int16_t));
+    /* 超过一个包的量拆开排队，不再截断。SNES 跑不满 60 fps 时按墙钟补的
+     * 采样数会超过 AUDIO_OUTPUT_MAX_FRAMES_PER_PACKET（见 snes_emu.c），
+     * 旧的截断写法会把多出来的那截静默丢掉 —— 正好是最难查的那类
+     * “声音有点不对”。
+     * ⚠ samples 不能是 s_producer_packet.stereo 本身：拆包后第二轮的
+     *   memcpy 就会自我重叠。__wrap_apu_emulate() 那条路径靠 NES 每帧
+     *   不超过一个包来保证只循环一次。 */
+    while (frame_count > 0) {
+        size_t chunk = frame_count > AUDIO_OUTPUT_MAX_FRAMES_PER_PACKET
+                     ? AUDIO_OUTPUT_MAX_FRAMES_PER_PACKET : frame_count;
 
-    if (xQueueSend(s_queue, &s_producer_packet, 0) != pdTRUE) {
-        s_dropped++;
+        s_producer_packet.sample_count = chunk;
+        memcpy(s_producer_packet.stereo, samples, chunk * 2 * sizeof(int16_t));
+
+        if (xQueueSend(s_queue, &s_producer_packet, 0) != pdTRUE) {
+            s_dropped++;
+        }
+        samples     += chunk * 2;
+        frame_count -= chunk;
     }
 }
 

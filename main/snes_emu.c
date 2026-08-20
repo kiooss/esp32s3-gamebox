@@ -61,10 +61,35 @@ _Static_assert(DISP_W == SNES_WIDTH / GROUP_SRC * GROUP_DST,
  * SMW 全程是 224 行模式）。 */
 #define SNES_FB_BYTES   (SNES_WIDTH * 2 * SNES_HEIGHT_EXTENDED)
 
-/* 缓冲按 50 fps（PAL）的最大需求分配，每帧实际提交多少按卡带真实帧率算 ——
- * 见 s_audio_frames。之前固定按 480 提交是个 bug：NTSC 60 fps 只需要 400，
- * 多产的 20% 既白烧 CPU（snes9x 的 dsp.c 混音不便宜），又和 I2S 的消费速率对不上。 */
-#define SNES_AUDIO_MAX_FRAMES  AUDIO_OUTPUT_MAX_FRAMES_PER_PACKET
+/* 每帧提交多少采样由主循环按墙钟时间现算（见那里的长注释），所以上限不能
+ * 按卡带帧率定。但也**不能随便往大了写**：
+ *
+ * ⚠ soundux.c 的 MixBuffer / EchoBuffer 都是定长 SOUND_BUFFER_SIZE 个 int32
+ *   （按 PAL 50 fps 的最坏情况算出来的 1321），而 S9xMixSamples() 对传进去的
+ *   sample_count 不做任何边界检查 —— 一次 memset 就能越过 EchoBuffer 冲掉后面
+ *   的 FilterTaps / Loop / 包络速率表。速率表一乱，声道的包络永久输出垃圾，
+ *   症状是「一次越界之后永远杂音」，而且重启游戏才恢复。曾经把上限写成
+ *   40 ms（960 帧 = 1920 采样）就是踩了这个，开局第一帧的提前量直接顶上限。
+ *
+ * 所以**单次调用**的上限绑死在核心自己的常数上：SOUND_BUFFER_SIZE 是交错
+ * 采样数，除以 2 才是立体声帧数（660 帧 = 24 kHz 下 27.5 ms）。改采样率或换
+ * 核心版本时这个数会自动跟着走，不用记得同步。
+ *
+ * 主循环按这个上限**分次调用** S9xMixSamples。24 kHz 下一帧通常一次就够
+ * （27.5 ms 比帧长），但开局垫提前量和长停顿之后要补的量会超，所以循环是
+ * 必需的，不是防御性代码。 */
+#define SNES_AUDIO_MAX_FRAMES  (SOUND_BUFFER_SIZE / 2)
+_Static_assert(SNES_AUDIO_MAX_FRAMES * 2 <= SOUND_BUFFER_SIZE,
+               "单次混音的采样数不能超过 soundux.c 的 MixBuffer/EchoBuffer 容量");
+
+/* 一帧总共最多补多少（分次调用，每次不超过上面那个）。两次的量够覆盖
+ * 40 ms 提前量加一个正常帧，又不至于在长停顿之后一次性灌进去半秒的声音。 */
+#define SNES_AUDIO_MAX_PER_FRAME  (SNES_AUDIO_MAX_FRAMES * 2)
+
+/* 开局垫这么多提前量，之后也按它封顶积欠。 */
+#define SNES_AUDIO_LEAD_US     40000
+/* 累加器单位是「采样 x 1e6」，提前量换算过来就是这个数。 */
+#define AUDIO_LEAD_ACCUM       ((int64_t)SNES_AUDIO_LEAD_US * AUDIO_OUTPUT_SAMPLE_RATE)
 
 /* memmap.c 分配 ROM 时会多要 64 KB「for mapping purposes」——
  * 映射表以 32/64 KB 为粒度指进 ROM，末页可能越过实际文件尾。照抄这个余量。 */
@@ -112,7 +137,6 @@ static uint16_t *s_framebuf;    /* GFX.Screen，内部 SRAM，SNES_WIDTH x 239 *
 static uint16_t *s_present;     /* 推屏源，PSRAM */
 static int16_t  *s_soundbuf;
 static bool      s_audio_ok;
-static int       s_audio_frames; /* 每帧提交多少立体声帧，由卡带帧率决定 */
 static uint16_t  s_pad_state;    /* 每帧只轮询一次，核心回调读取这份快照 */
 
 /* 条带回调 —— 跑在核 1 上。做三件事：纵向最近邻选源行、横向 4:5 扩展、
@@ -444,10 +468,23 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
     const int fps = Memory.ROMFramesPerSecond ?: 60;
     const int frame_period_us = 1000000 / fps;
 
-    /* 每帧该产多少采样由卡带帧率决定：NTSC 400，PAL 480。
-     * 取错了不只是浪费 CPU —— I2S 按固定速率消费，产多了队列会涨。 */
-    s_audio_frames = AUDIO_OUTPUT_SAMPLE_RATE / fps;
-    if (s_audio_frames > SNES_AUDIO_MAX_FRAMES) s_audio_frames = SNES_AUDIO_MAX_FRAMES;
+    /* 每帧产多少采样按「上一帧真正过了多少墙钟时间」算，不按卡带帧率。
+     *
+     * 按卡带帧率算（NTSC 固定 400）只在模拟器真能跑满 60 fps 时才成立。
+     * SMW 实测只有 45~46 fps，于是每秒只产 18000 个采样喂给 24000 Hz 的
+     * I2S，缺的 25% 由 i2s 驱动的 auto_clear 补零 —— 音乐本身是对的，但被
+     * 切成约 45 Hz 的断续，听上去就是一直压着一层杂音。换 I2S 采样率没用：
+     * 设采样率 R、每帧产 R/60，实际产出 F·R/60 要等于 R 就得 F=60，R 约掉了。
+     *
+     * 按墙钟产样后，音画一起变成 75% 慢放：音高不变（音高由 DSP 的 pitch
+     * 寄存器和 so.freqbase 决定，跟产多少个采样无关），只有音符事件跟着
+     * 模拟速度一起变慢，和画面是一致的。
+     *
+     * 累加器的单位是「采样 x 1e6」，这样 24000 除不尽 1e6 的余数不会逐帧
+     * 丢失。开局先垫 SNES_AUDIO_LEAD_US 的量：产=耗的稳态下 DMA 环占用会
+     * 停在零附近，任何一次长帧都要爆一次空，得始终留一小段提前量吸抖动。 */
+    int64_t audio_accum   = AUDIO_LEAD_ACCUM;
+    int64_t audio_last_us = esp_timer_get_time();
 
     int     skip_frames  = 0;
     int     emu_frames   = 0;      /* 模拟了多少帧 */
@@ -537,22 +574,40 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
         int64_t t2 = esp_timer_get_time();
         blit_us += t2 - t1;
 
+        audio_accum += (t2 - audio_last_us) * AUDIO_OUTPUT_SAMPLE_RATE;
+        audio_last_us = t2;
+        int audio_frames = (int)(audio_accum / 1000000);
+        if (audio_frames < 1) audio_frames = 1;
+        if (audio_frames > SNES_AUDIO_MAX_PER_FRAME) audio_frames = SNES_AUDIO_MAX_PER_FRAME;
+        audio_accum -= (int64_t)audio_frames * 1000000;
+        if (audio_accum < 0) audio_accum = 0;
+        /* 剩下的欠账封顶在提前量本身。写存档、冷启动这类长停顿会一次攒出几百
+         * 毫秒，补不回来就别补：留着只会让之后连续几十帧顶到上限，把迟到的
+         * 声音硬灌进去。封到这里，效果正好是「长停顿之后重新建立一次提前量」。 */
+        if (audio_accum > AUDIO_LEAD_ACCUM) audio_accum = AUDIO_LEAD_ACCUM;
+
         /* S9xMixSamples 不只是“输出声音”：它还推进包络、采样位置等会被
          * 即时存档序列化的混音器状态。即使菜单关了声音或 I2S 没起来也必须
          * 每帧调用并丢掉 PCM，否则 APU 与 SoundData 停在不同时间点，静音时
          * 保存出来的状态可能在恢复后一直无声。 */
-        S9xMixSamples((int16_t *)s_soundbuf, s_audio_frames * 2);
         uint32_t frame_peak = 0;
-        for (int i = 0; i < s_audio_frames * 2; i++) {
-            int sample = s_soundbuf[i];
-            uint32_t magnitude = (uint32_t)(sample < 0 ? -sample : sample);
-            if (magnitude > frame_peak) frame_peak = magnitude;
+        for (int done = 0; done < audio_frames; ) {
+            int chunk = audio_frames - done;
+            if (chunk > SNES_AUDIO_MAX_FRAMES) chunk = SNES_AUDIO_MAX_FRAMES;
+
+            S9xMixSamples((int16_t *)s_soundbuf, chunk * 2);
+            for (int i = 0; i < chunk * 2; i++) {
+                int sample = s_soundbuf[i];
+                uint32_t magnitude = (uint32_t)(sample < 0 ? -sample : sample);
+                if (magnitude > frame_peak) frame_peak = magnitude;
+            }
+            if (s_audio_ok && audio_output_get_volume() > 0) {
+                audio_output_submit_stereo(s_soundbuf, chunk);
+            }
+            done += chunk;
         }
         if (frame_peak > pcm_peak) pcm_peak = frame_peak;
         if (frame_peak != 0) pcm_nonzero++;
-        if (s_audio_ok && audio_output_get_volume() > 0) {
-            audio_output_submit_stereo(s_soundbuf, s_audio_frames);
-        }
         audio_us += esp_timer_get_time() - t2;
 
         /* 旧固件静音时不推进混音器，两个实物存档槽都出现过这种状态：APU

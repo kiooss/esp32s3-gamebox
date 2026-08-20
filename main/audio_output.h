@@ -32,6 +32,7 @@ esp_err_t audio_output_set_volume(int percent);
  * 就能拿到"这一小段时间里有多响"，静音或调低音量时也会跟着变小。 */
 int audio_output_take_peak(void);
 
-/* 向 I2S 队列提交交错排列的立体声 S16 帧。只复制、不等待 DMA；队列满时
- * 丢当前包并记入诊断计数。所有模拟器共用这一条宿主接口。 */
+/* 向 I2S 队列提交交错排列的立体声 S16 帧。只复制、不等待 DMA；超过
+ * AUDIO_OUTPUT_MAX_FRAMES_PER_PACKET 的量拆成多个包依次排队（不截断），
+ * 队列满时丢当前包并记入诊断计数。所有模拟器共用这一条宿主接口。 */
 void audio_output_submit_stereo(const int16_t *samples, size_t frame_count);
