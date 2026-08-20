@@ -61,6 +61,26 @@ _Static_assert(DISP_W == SNES_WIDTH / GROUP_SRC * GROUP_DST,
  * SMW 全程是 224 行模式）。 */
 #define SNES_FB_BYTES   (SNES_WIDTH * 2 * SNES_HEIGHT_EXTENDED)
 
+/* SNES 跟 NES/GB 共用 AUDIO_OUTPUT_SAMPLE_RATE（24 kHz），不像 Genesis 那样
+ * 自己定一个。
+ *
+ * 试过改成 32 kHz（SNES DSP 的原生速率），**实测不解决问题，已回退**。
+ * 记下推导过程，省得以后有人再走一遍：soundux 对每个 BRR 声道按输出采样率
+ * 直接重采样，而插值只在 `freq < FIXED_POINT` 时才开（soundux.c 的 504 和
+ * 707 两处，不满足就 ch->interpolate = 0，退化成纯点采样）：
+ *
+ *   freqbase = (FIXED_POINT << 11) / (rate * 33 / 32)
+ *   freq     = (hertz * freqbase) >> 11        hertz = DSP pitch 寄存器 * 8
+ *
+ *   rate=24000 -> freqbase 5423 -> 门槛 hertz < 24748
+ *   rate=32000 -> freqbase 4067 -> 门槛 hertz < 33006
+ *
+ * 原音高（pitch=0x1000）对应 hertz = 32768，所以 24 kHz 下所有声道确实都掉在
+ * 门槛外、退化成 1.29 倍无滤波抽取。推导没错，但**听感上不是问题所在**：
+ * 同样 24 kHz 下其它 SNES 卡带声音是干净的，只有会恢复即时存档的 SMW 有杂音。
+ * 换 32 kHz 只会让混音量涨 33%（音频那栏 0.8~1.3 -> 1.1~1.7 ms/帧），
+ * 白花核 0 的时间。 */
+
 /* 每帧提交多少采样由主循环按墙钟时间现算（见那里的长注释），所以上限不能
  * 按卡带帧率定。但也**不能随便往大了写**：
  *
@@ -100,6 +120,21 @@ _Static_assert(SNES_AUDIO_MAX_FRAMES * 2 <= SOUND_BUFFER_SIZE,
 
 /* 1 = 模拟照跑但完全不推屏，用来单独量 CPU+PPU 的耗时（对照 nes_emu.c 的 DIAG_TIMING）。 */
 #define SNES_DIAG_NO_BLIT  0
+
+/* 1 = 照常模拟、照常混音、照常按原速率和原包大小提交，只在提交前把 PCM 清零。
+ *
+ * 用来分开「杂音来自 snes9x 产出的 PCM」和「杂音来自模拟端 / 供电」这两种可能。
+ * ⚠ 不能拿菜单里的音量 0% 当这个对照：那条路径连 I2S 都不创建，而 MAX98357
+ *   在 BCLK/LRCLK 消失时自动关断 —— 功放一关，两种来源的噪声都会一起消失。
+ *   这个开关让 I2S、DMA、消费任务和功放时钟全部照常，唯一变的只有数据内容。
+ *
+ * 还有杂音 => 不是 PCM，往供电 / 布线查（对照 AGENTS.md 里那条只在 SNES
+ *             出现、且和画面忙不忙无关的背光闪烁）。
+ * 变干净   => 就在 PCM 里，回 snes9x 侧查。
+ *
+ * 清零放在峰值统计之后，所以统计行里的 PCM峰值 仍然是真实值，一次运行
+ * 同时拿到听感结论和 PCM 数据。 */
+#define SNES_DIAG_MUTE_PCM  0
 
 /* SMW 的即时存档组合键。两键从按下那一帧起就不传给游戏，持续 1 秒才写盘，
  * 避免正常按 START 暂停时误存；松开以后才能再触发下一次。 */
@@ -356,6 +391,69 @@ static esp_err_t install_rom(const rom_store_entry_t *entry, uint32_t *rom_crc)
     return ESP_OK;
 }
 
+/* 恢复即时存档之后重建混音器状态。不这么做的症状是**恢复存档就永久杂音**，
+ * 而菜单里按住 Y 冷启动同一个卡带声音正常 —— 这是实测出来的对照，不是推理。
+ *
+ * 成因：snapshot.c 把整个 SoundData 原样写盘、原样读回，但上游的
+ * S9xFixSoundAfterSnapshotLoad()（soundux.c:266）只重建三样：echo 参数、
+ * 8 个滤波系数、每声道的 frequency 和 envxx。包络（mode/state/各段速率/
+ * erate/envx_target）、每声道音量档位、主音量全部沿用快照里的原值，和恢复
+ * 后的 SPC700 现场对不上。
+ *
+ * 为什么不就地修补：那条路以前走过一次，结论记在主循环那段看门狗注释里
+ * ——「重算音量或重启声道都只能响一两帧」。所以这里改成**把混音器拉回静止，
+ * 再整体从 APU.DSP[] 重放一遍**。DSP 寄存器和 IAPU.RAM 都是快照里逐字节
+ * 恢复的权威数据，从它们推导出来的状态一定自洽。
+ *
+ * 下面每一步都对着 apu.c 里 DSP 寄存器写入的同名分支抄，只是一次性重放全部
+ * 寄存器而不是逐次响应写入。⚠ 改 apu.c 的那个 switch 时这里要跟着改。
+ *
+ * 代价：恢复瞬间正在延续的长音要等音乐驱动下一次 key-on 才回来。声道停在
+ * SOUND_SILENT（S9xSetSoundMode() 对 SILENT 声道只记参数、不改 state），
+ * 由 SPC700 写 KON 时的 S9xPlaySample() 正常点起。换掉的是永久杂音。 */
+static void rebuild_sound_after_resume(void)
+{
+    /* full=false：只清 8 个声道和滤波器，保留 echo_enable / echo_write_enabled /
+     * pitch_mod / noise_hertz 这些从快照恢复的全局项。 */
+    S9xResetSound(false);
+
+    for (int c = 0; c < 8; c++) {
+        const int base = c << 4;   /* 每声道的寄存器块，和 apu.c 的 reg >> 4 对应 */
+
+        S9xSetSoundType(c, (APU.DSP[APU_NON] & (1 << c)) ? SOUND_NOISE
+                                                         : SOUND_SAMPLE);
+        S9xSetSoundVolume(c, (int8_t)APU.DSP[base + APU_VOL_LEFT],
+                             (int8_t)APU.DSP[base + APU_VOL_RIGHT]);
+        S9xSetSoundHertz(c, ((APU.DSP[base + APU_P_LOW] |
+                              (APU.DSP[base + APU_P_HIGH] << 8))
+                             & FREQUENCY_MASK) * 8);
+        /* GAIN / ADSR1 / ADSR2 三个寄存器一起决定 mode 和各段速率。 */
+        S9xFixEnvelope(c, APU.DSP[base + APU_GAIN],
+                          APU.DSP[base + APU_ADSR1],
+                          APU.DSP[base + APU_ADSR2]);
+    }
+
+    /* S9xResetSound() 无条件把主音量按成 127，必须从寄存器取回。 */
+    S9xSetMasterVolume((int8_t)APU.DSP[APU_MVOL_LEFT],
+                       (int8_t)APU.DSP[APU_MVOL_RIGHT]);
+    S9xSetEchoVolume((int8_t)APU.DSP[APU_EVOL_LEFT],
+                     (int8_t)APU.DSP[APU_EVOL_RIGHT]);
+    S9xSetFrequencyModulationEnable(APU.DSP[APU_PMON]);
+
+    /* 上游那支放最后跑：echo 延迟/反馈、滤波系数、每声道 needs_decode +
+     * frequency + envxx，都基于上面已经归位的值重算。 */
+    S9xFixSoundAfterSnapshotLoad();
+
+    /* 噪声声道的频率来自 FLG 的噪声档位而不是音高寄存器（apu.c 的 APU_FLG
+     * 分支）。必须在上一句之后 —— 它会拿 ch->hertz 把 frequency 重算成音高
+     * 派生值，把噪声频率覆盖掉。 */
+    for (int c = 0; c < 8; c++) {
+        if (SoundData.channels[c].type == SOUND_NOISE) {
+            S9xSetSoundFrequency(c, SoundData.noise_hertz);
+        }
+    }
+}
+
 esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
 {
     if (!entry || entry->size < 1024) return ESP_ERR_INVALID_ARG;
@@ -439,6 +537,7 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
             resumed = recovered_previous ? snes_save_load_previous(rom_crc)
                                          : snes_save_load_latest(rom_crc);
         }
+        if (resumed) rebuild_sound_after_resume();
     }
 
     esp_err_t rgb_err = rgb_led_init();
@@ -601,6 +700,9 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
                 uint32_t magnitude = (uint32_t)(sample < 0 ? -sample : sample);
                 if (magnitude > frame_peak) frame_peak = magnitude;
             }
+#if SNES_DIAG_MUTE_PCM
+            memset(s_soundbuf, 0, (size_t)chunk * 2 * sizeof(int16_t));
+#endif
             if (s_audio_ok && audio_output_get_volume() > 0) {
                 audio_output_submit_stereo(s_soundbuf, chunk);
             }
