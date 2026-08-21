@@ -136,6 +136,13 @@ _Static_assert(SNES_AUDIO_MAX_FRAMES * 2 <= SOUND_BUFFER_SIZE,
  * 同时拿到听感结论和 PCM 数据。 */
 #define SNES_DIAG_MUTE_PCM  0
 
+/* 1 = 每秒多打一行三路输入的分项耗时（串口 / 摇杆 / USB）。
+ *
+ * 主统计行里的「输入」是三者之和。真要定位是哪一路贵才需要拆开，平时留 0：
+ * 拆分本身只是多两次 esp_timer_get_time()（寄存器读，约 0.1 us），不心疼，
+ * 但每秒多一行日志会把串口刷得难看。 */
+#define SNES_PROFILE_INPUT  0
+
 /* SMW 的即时存档组合键。两键从按下那一帧起就不传给游戏，持续 1 秒才写盘，
  * 避免正常按 START 暂停时误存；松开以后才能再触发下一次。 */
 #define SAVE_COMBO_BITS    (GAMEPAD_BIT_SELECT | GAMEPAD_BIT_A)
@@ -591,6 +598,16 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
     int64_t emu_us       = 0;
     int64_t blit_us      = 0;
     int64_t audio_us     = 0;
+    /* 这几个桶加上上面三个要**凑满整帧**。以前只统计模拟/拷贝/音频三项，
+     * 打出来的「CPU 余量」就成了假数：显示余量 48%，帧率却上不去 60 ——
+     * 差额全落在没人计时的地方（循环开头的输入轮询、配速用掉的等待、
+     * 以及零散的判断）。span_us 按「上一次循环顶到这一次循环顶」量整帧，
+     * 其它 = span - 各项之和，任何新的耗时都无处可藏。 */
+    int64_t input_us     = 0;
+    int64_t pace_us      = 0;
+    int64_t serial_us    = 0;   /* 三路输入的分项，见 SNES_PROFILE_INPUT */
+    int64_t gamepad_us   = 0;
+    int64_t usb_us       = 0;
     uint32_t pcm_peak    = 0;
     uint32_t pcm_nonzero = 0;
     uint32_t resume_zero_frames = 0;
@@ -601,7 +618,21 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
     int64_t exit_hold_t0 = 0;
 
     while (1) {
-        s_pad_state = input_serial_poll() | input_gamepad_poll() | input_usb_poll();
+        int64_t t_top = esp_timer_get_time();
+        /* 三路拆开单独计时。原来写成一行 `a() | b() | c()`，求值顺序由编译器
+         * 决定；拆成顺序调用再按位或，语义不变（三个都要调用，都不能短路）。 */
+        uint16_t pad = input_serial_poll();
+        int64_t t_in1 = esp_timer_get_time();
+        pad |= input_gamepad_poll();
+        int64_t t_in2 = esp_timer_get_time();
+        pad |= input_usb_poll();
+        int64_t t_in3 = esp_timer_get_time();
+        s_pad_state = pad;
+
+        serial_us  += t_in1 - t_top;
+        gamepad_us += t_in2 - t_in1;
+        usb_us     += t_in3 - t_in2;
+        input_us   += t_in3 - t_top;
 
         bool save_combo = save_enabled &&
                           (s_pad_state & SAVE_COMBO_BITS) == SAVE_COMBO_BITS;
@@ -623,6 +654,8 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
                 next_frame = stat_t0 = esp_timer_get_time();
                 emu_frames = drawn_frames = 0;
                 emu_us = blit_us = audio_us = 0;
+                input_us = pace_us = 0;
+                serial_us = gamepad_us = usb_us = 0;
                 continue;
             }
         } else {
@@ -740,6 +773,8 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
             next_frame = stat_t0 = esp_timer_get_time();
             emu_frames = drawn_frames = 0;
             emu_us = blit_us = audio_us = 0;
+            input_us = pace_us = 0;
+            serial_us = gamepad_us = usb_us = 0;
             pcm_peak = pcm_nonzero = 0;
             continue;
         }
@@ -756,28 +791,50 @@ esp_err_t snes_emu_run(const rom_store_entry_t *entry, uint16_t launch_keys)
             next_frame = now;
             vTaskDelay(1);   /* 跑不满时也要喂 idle task / 看门狗 */
         }
+        /* 「配速」这一项大不大，直接说明是不是真的在等。
+         *
+         * ⚠ 试过「每 4 帧才 vTaskDelay(1) 一次」来回收这段时间，**实测完全无效，
+         *   已回退**。按场景（模拟耗时）对齐做的 A/B 里每一档 fps 都在 ±0.2 内。
+         *   原因是配速时间根本不是那次强制让出：它随模拟耗时单调递减（模拟
+         *   9 ms 时配速 6.7 ms，模拟 18 ms 时只剩 1.65 ms），这是「上一帧干得快、
+         *   所以在等 next_frame」的签名；强制让出的话应该是个常数。
+         *   结论：这里没有可回收的浪费，瓶颈全在 S9xMainLoop。 */
+        pace_us += esp_timer_get_time() - now;
 
         emu_frames++;
         now = esp_timer_get_time();
         if (now - stat_t0 >= 1000000) {
             int emu_fps10  = (int)(emu_frames * 10000000LL / (now - stat_t0));
             int draw_fps10 = (int)(drawn_frames * 10000000LL / (now - stat_t0));
-            int headroom   = 100 - (int)((emu_us + blit_us + audio_us) * 100 /
-                                          (now - stat_t0));
-            printf("SNES 模拟 %d.%d fps / 推屏 %d.%d fps  "
-                   "(模拟 %.1f + 拷贝 %.1f + 音频 %.1f ms/帧，CPU 余量 %d%%，"
-                   "PCM峰值 %u，非零帧 %u/%d)\n",
+            /* 「其它」= 整帧 - 五个已知项。它不该长期是个大数：真变大就说明
+             * 有新的耗时钻进了循环里没被计时的缝隙，照着位置去补一个桶。 */
+            int64_t known_us = input_us + emu_us + blit_us + audio_us + pace_us;
+            /* 整帧直接取统计窗口除以帧数 —— 精确，且不需要额外跟踪上一轮的
+             * 时间戳。之前用「上一轮顶到这一轮顶」累加，一个窗口里 N 帧只有
+             * N-1 段跨度，「其它」会因此偶尔算出负数。 */
+            int64_t span_us = now - stat_t0;
+            float ms = 1000.0f * emu_frames;   /* 把 us 总量换算成 ms/帧的除数 */
+            printf("SNES 模拟 %d.%d fps / 推屏 %d.%d fps  帧 %.1f ms = "
+                   "输入 %.1f + 模拟 %.1f + 拷贝 %.1f + 音频 %.1f + 配速 %.1f + 其它 %.1f"
+                   "  (PCM峰值 %u，非零帧 %u/%d)\n",
                    emu_fps10 / 10, emu_fps10 % 10,
                    draw_fps10 / 10, draw_fps10 % 10,
-                   (float)emu_us / 1000.0f / emu_frames,
-                   (float)blit_us / 1000.0f / emu_frames,
-                   (float)audio_us / 1000.0f / emu_frames,
-                   headroom,
+                   (float)span_us / ms,
+                   (float)input_us / ms, (float)emu_us / ms,
+                   (float)blit_us / ms, (float)audio_us / ms,
+                   (float)pace_us / ms, (float)(span_us - known_us) / ms,
                    (unsigned)pcm_peak, (unsigned)pcm_nonzero, emu_frames);
+#if SNES_PROFILE_INPUT
+            printf("  输入细分：串口 %.2f + 摇杆 %.2f + USB %.2f ms/帧\n",
+                   (float)serial_us / ms, (float)gamepad_us / ms,
+                   (float)usb_us / ms);
+#endif
             int fps_pct = draw_fps10 * 10 / fps;   /* draw_fps10 是 *10 定点，先乘 10 再除才是百分比 */
             rgb_led_report_perf(fps_pct > 100 ? 100 : fps_pct);
             emu_frames = drawn_frames = 0;
             emu_us = blit_us = audio_us = 0;
+            input_us = pace_us = 0;
+            serial_us = gamepad_us = usb_us = 0;
             pcm_peak = pcm_nonzero = 0;
             stat_t0 = now;
         }
