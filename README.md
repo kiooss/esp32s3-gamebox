@@ -396,25 +396,47 @@ NES 画面对不上的组合），以及 `display.c` 的 `BAND_LINES`（最好�
 
 ## 授权
 
-`components/nofrendo/` 取自 [retro-go](https://github.com/ducalex/retro-go)，
-源自 Matthew Conte 的 Nofrendo，**GPL v2**
-（见 `components/nofrendo/COPYING` 和 `CREDITS`，源码未做修改）。
+**`main/` 下的代码（本项目自己写的部分）以 GPL v2 发布**，许可文本见仓库根的
+`LICENSE`。选 GPL v2 是被约束出来的：`main/` 链接 GPLv2-only 的 nofrendo，
+再宽松的选择都会让合并作品不合规。
 
-`components/gnuboy/` 同样取自 Retro-Go，基线提交记录在该目录的
-`README.gamebox.md`，许可文本见 `components/gnuboy/COPYING`。
+`components/` 下的四个模拟器核心各自保持上游许可，**没有被本项目重新授权**：
 
-`components/snes9x/` 也取自 Retro-Go，但**授权和上面两个不同**：
-`components/snes9x/src/LICENSE` 是 Snes9x 自己的许可证，不是 GPL，
-**明确禁止商业分发**。
+| 组件 | 上游 | 许可 | 备注 |
+|---|---|---|---|
+| `nofrendo/` | [retro-go](https://github.com/ducalex/retro-go) → Matthew Conte 的 Nofrendo | `COPYING` 是 GPL v2 | ⚠ 73 个源文件头写的是「version 2 of the GNU **Library** GPL」，且**没有 or later**。头和 COPYING 不是同一个许可证 |
+| `gnuboy/` | retro-go | `COPYING` 是 GPL v2 | ⚠ 源文件**完全没有许可头**，只能靠 COPYING 推定 |
+| `snes9x/` | retro-go → libretro/snes9x2005 | `src/LICENSE` 是拼接的：前半 ndssfc 为 GPL v2+，后半是 Snes9x 自有许可 | 见下 |
+| `gwenesis/` | retro-go | 目录 `LICENSE` 是 **AGPL v3** | ⚠ 各源码文件头写的是 **GPL v3 or later**，与目录 LICENSE 不一致 |
 
-`components/gwenesis/` 取自 [retro-go](https://github.com/ducalex/retro-go/tree/master/gwenesis/components/gwenesis)，
-基线和 Gamebox 的两处必要适配记录在该目录 `README.gamebox.md`。保留了上游
-`LICENSE` 和各源码文件头。需要注意：目录里的 `LICENSE` 是 AGPL v3，
-而各 Gwenesis 源码文件头写的是 GPL v3 or later；这是上游已有的不一致，公开分发前应
-先向上游确认准确授权，不能自行选择较宽松的一项。
+`main/menu_font.c` 的字形来自 GNU Unifont 17.0.04（SIL OFL 1.1，或 GPL v2+ 带
+字体嵌入例外），没有许可问题。
 
-由于 Gwenesis 与其他核心一起静态链接，分发完整固件时必须同时满足各组件许可证；
-如果公开发布二进制，需要提供相应完整源码。而 snes9x 那条又叠加了
-禁止商业用途 —— 两者取交集，实际上这个固件只能非商业地分发。
+### ⚠ 为什么本仓库不分发构建产物
 
-`main/` 下的代码是本项目自己写的。ROM 文件的版权归各自权利人所有。
+**只发源码、不发 `.bin`，是一个有意的许可决定，不是偷懒。** 源码目录里各组件并列
+属于 GPL 意义上的「聚合」；真正的合并作品是链接出来的固件二进制，而它有两处
+无法回避的不兼容：
+
+1. **Snes9x 的「仅限非商业」限制和 GPL 不兼容。** 注意方向：Snes9x 许可证原文
+   *明确允许*非商业地分发源码和二进制（"Permission to use, copy, modify and/or
+   distribute Snes9x in both binary and source form, for non-commercial purposes,
+   is hereby granted without fee"）。违反的是 GPL —— GPL 禁止在再分发时附加任何
+   额外限制，而 nofrendo/gnuboy 是 GPL。**所以这不是「只能非商业分发」，
+   是合并作品根本不能按 GPL 分发。**
+
+2. **GPLv2-only 和 GPLv3/AGPLv3 不能合并。** nofrendo 的源文件写死 version 2、
+   没有 or later；gwenesis 是 GPL v3+ / AGPL v3。**就算删掉 snes9x，这个组合
+   仍然不合规。**
+
+加上上表里三处上游元数据自相矛盾（nofrendo 头 vs COPYING、gnuboy 没有头、
+gwenesis 目录 vs 头），每一条都得先定性才谈得上发布二进制。
+
+所以本仓库的立场是：**自己 `idf.py build`。** 个人编译自用不触发任何分发义务。
+想发布烧好的固件，得先砍到单一许可阵营（比如只留 NES + GB/GBC 走 GPL v2），
+或者换掉冲突的核心。
+
+ROM 文件的版权归各自权利人所有，商业 ROM 一律不入库，由使用者自备。
+
+（以上是读各许可文件得出的结构分析，不构成法律意见。真要对外发布二进制，
+请找人正式审一遍。）

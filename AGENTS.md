@@ -135,8 +135,13 @@ GB/GBC（共用 `gbc_emu.c`）、Genesis 都已经改走 `display_stream_sized()
 `RETRO_GO` 宏必须是 `PUBLIC`，否则 main 和组件对 `IRAM_ATTR` 的取值会打架。
 `-O3` 是性能关键。
 
-⚠️ Gwenesis 的目录 `LICENSE` 是 AGPL v3、源码头却写 GPL v3+，上游元数据不一致；
-Snes9x 另有非商业分发限制。发布完整固件前必须先澄清并逐项满足组件许可。
+⚠️ **本仓库只分发源码，不分发构建产物（`.bin`），这是有意的许可决定。**
+`main/` 是 GPL v2（根 `LICENSE`），四个核心各自保持上游许可。链接出来的固件
+二进制有两处不可回避的不兼容：Snes9x 的「仅限非商业」附加限制与 GPL 冲突
+（注意方向 —— Snes9x 本身允许非商业分发，是 GPL 不许附加限制）；nofrendo 是
+GPLv2-**only**（源文件无 or later）而 gwenesis 是 GPL v3+/AGPL v3，两者不能合并。
+所以**不要往仓库里提交 `.bin`/`.elf`，也不要加发布二进制的 CI**。
+完整推导和三处上游元数据矛盾见 `README.md` 的「授权」一节。
 
 ## 改动时要同步的跨文件不变量
 
