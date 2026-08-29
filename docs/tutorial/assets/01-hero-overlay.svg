@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <defs>
+    <clipPath id="heroClip"><rect x="40" y="210" width="1000" height="690" rx="34"/></clipPath>
+    <linearGradient id="heroFade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0.55" stop-color="#282828" stop-opacity="0"/>
+      <stop offset="1" stop-color="#282828" stop-opacity="0.72"/>
+    </linearGradient>
+    <style>.cn { font-family: "PingFang SC", "Noto Sans CJK SC", sans-serif; }</style>
+  </defs>
+  <rect x="40" y="210" width="1000" height="690" rx="34" fill="url(#heroFade)" clip-path="url(#heroClip)"/>
+  <text x="78" y="835" class="cn" font-size="32" font-weight="800" fill="#fbf1c7">核心电子件 + 供电 + 装配耗材</text>
+  <text x="78" y="871" class="cn" font-size="22" fill="#ebdbb2">插图只用于辨认类别，购买时请按下面的型号与规格核对</text>
+</svg>

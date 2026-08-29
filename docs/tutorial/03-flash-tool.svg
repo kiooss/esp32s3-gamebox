@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="7" stdDeviation="9" flood-color="#3c3836" flood-opacity="0.13"/>
+    </filter>
+    <style>
+      .cn { font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+      .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+      .title { font-size: 70px; font-weight: 800; fill: #3c3836; }
+      .kicker { font-size: 25px; font-weight: 700; letter-spacing: 3px; fill: #d65d0e; }
+      .sub { font-size: 27px; fill: #665c54; }
+      .stepTitle { font-size: 31px; font-weight: 800; fill: #3c3836; }
+      .body { font-size: 24px; fill: #504945; }
+      .small { font-size: 21px; fill: #665c54; }
+      .uiLabel { font-size: 20px; font-weight: 700; fill: #504945; }
+      .uiValue { font-size: 22px; font-weight: 800; fill: #3c3836; }
+      .num { font-size: 28px; font-weight: 900; fill: #fbf1c7; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect width="1080" height="1920" fill="#fbf1c7"/>
+  <rect width="18" height="1920" fill="#d79921"/>
+
+  <text x="46" y="76" class="cn kicker">DIY GAMEBOX · 新手制作指南</text>
+  <text x="42" y="155" class="cn title">03  编译与烧录</text>
+  <text x="1038" y="150" class="cn sub" text-anchor="end">Windows 一键烧录</text>
+
+  <g transform="translate(40 190)">
+    <rect width="1000" height="108" rx="25" fill="#3c3836"/>
+    <text x="34" y="44" class="cn" font-size="27" font-weight="800" fill="#fabd2f">普通用户不用编译源码</text>
+    <text x="34" y="82" class="cn" font-size="23" fill="#fbf1c7">只需要 1 个文件：gamebox_merged_v1.0.0.bin　烧录地址：0x0000</text>
+  </g>
+
+  <!-- Step 1 -->
+  <g transform="translate(40 326)" filter="url(#shadow)">
+    <rect width="1000" height="236" rx="28" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <circle cx="58" cy="58" r="34" fill="#d65d0e"/><text x="58" y="68" class="cn num">1</text>
+    <text x="112" y="67" class="cn stepTitle">准备工具与连接开发板</text>
+    <text x="32" y="121" class="cn body">① Windows 下载并解压乐鑫官方 Flash Download Tools（建议 3.9.10+）</text>
+    <text x="32" y="162" class="cn body">② 用 USB-C 数据线连接开发板丝印“COM”的接口</text>
+    <text x="32" y="203" class="cn small">关闭串口监视器；同一个 COM 口不能被两个软件同时占用。</text>
+  </g>
+
+  <!-- Step 2 launcher -->
+  <g transform="translate(40 590)" filter="url(#shadow)">
+    <rect width="1000" height="286" rx="28" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <circle cx="58" cy="58" r="34" fill="#458588"/><text x="58" y="68" class="cn num">2</text>
+    <text x="112" y="67" class="cn stepTitle">打开工具，选择启动参数</text>
+
+    <g transform="translate(34 98)">
+      <rect width="932" height="158" rx="20" fill="#e8e4d4" stroke="#928374" stroke-width="2"/>
+      <rect width="932" height="38" rx="20" fill="#504945"/><rect y="20" width="932" height="18" fill="#504945"/>
+      <text x="18" y="27" class="cn" font-size="19" font-weight="700" fill="#fbf1c7">Flash Download Tool</text>
+
+      <text x="28" y="79" class="cn uiLabel">ChipType</text>
+      <rect x="132" y="52" width="178" height="42" rx="7" fill="#fff" stroke="#a89984"/>
+      <text x="146" y="80" class="cn uiValue">ESP32-S3</text>
+
+      <text x="340" y="79" class="cn uiLabel">WorkMode</text>
+      <rect x="460" y="52" width="166" height="42" rx="7" fill="#fff" stroke="#a89984"/>
+      <text x="479" y="80" class="cn uiValue">Develop</text>
+
+      <text x="652" y="79" class="cn uiLabel">LoadMode</text>
+      <rect x="760" y="52" width="136" height="42" rx="7" fill="#fff" stroke="#a89984"/>
+      <text x="790" y="80" class="cn uiValue">UART</text>
+
+      <rect x="720" y="108" width="176" height="38" rx="9" fill="#458588"/>
+      <text x="808" y="135" class="cn" font-size="21" font-weight="800" text-anchor="middle" fill="#fbf1c7">OK</text>
+      <text x="28" y="135" class="cn small">三个选项确认无误后点 OK</text>
+    </g>
+  </g>
+
+  <!-- Step 3 main window -->
+  <g transform="translate(40 904)" filter="url(#shadow)">
+    <rect width="1000" height="538" rx="28" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <circle cx="58" cy="58" r="34" fill="#689d6a"/><text x="58" y="68" class="cn num">3</text>
+    <text x="112" y="67" class="cn stepTitle">只选一个合并固件，然后 START</text>
+
+    <g transform="translate(28 98)">
+      <rect width="944" height="404" rx="20" fill="#e8e4d4" stroke="#928374" stroke-width="2"/>
+      <rect width="944" height="40" rx="20" fill="#504945"/><rect y="21" width="944" height="19" fill="#504945"/>
+      <text x="18" y="28" class="cn" font-size="19" font-weight="700" fill="#fbf1c7">SPIDownload</text>
+
+      <text x="22" y="76" class="cn uiLabel">Download Path Config</text>
+      <rect x="22" y="92" width="28" height="28" rx="4" fill="#689d6a" stroke="#3c3836" stroke-width="2"/>
+      <path d="M28 105l6 7 12-15" fill="none" stroke="#fbf1c7" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="62" y="88" width="650" height="40" rx="7" fill="#fff" stroke="#a89984"/>
+      <text x="76" y="115" class="mono" font-size="19" fill="#3c3836">gamebox_merged_v1.0.0.bin</text>
+      <rect x="728" y="88" width="188" height="40" rx="7" fill="#fff" stroke="#a89984" stroke-width="2"/>
+      <text x="822" y="116" class="mono" font-size="22" font-weight="800" text-anchor="middle" fill="#cc241d">0x0000</text>
+
+      <rect x="22" y="151" width="900" height="58" rx="12" fill="#f2e5bc"/>
+      <text x="38" y="187" class="cn" font-size="22" font-weight="800" fill="#cc241d">只勾这一行，不要再添加 bootloader、partition 或 app 文件。</text>
+
+      <text x="22" y="246" class="cn uiLabel">SPI MODE</text>
+      <rect x="132" y="220" width="110" height="40" rx="7" fill="#fff" stroke="#a89984"/>
+      <text x="187" y="247" class="cn uiValue" text-anchor="middle">DIO</text>
+      <text x="276" y="246" class="cn uiLabel">SPI SPEED</text>
+      <rect x="402" y="220" width="126" height="40" rx="7" fill="#fff" stroke="#a89984"/>
+      <text x="465" y="247" class="cn uiValue" text-anchor="middle">80 MHz</text>
+      <text x="558" y="246" class="cn small">3.9.10+ 通常自动读取，无需修改</text>
+
+      <text x="22" y="304" class="cn uiLabel">COM</text>
+      <rect x="82" y="278" width="132" height="42" rx="7" fill="#fff" stroke="#a89984"/>
+      <text x="148" y="306" class="cn uiValue" text-anchor="middle">COMx</text>
+      <text x="248" y="304" class="cn uiLabel">BAUD</text>
+      <rect x="318" y="278" width="154" height="42" rx="7" fill="#fff" stroke="#a89984"/>
+      <text x="395" y="306" class="cn uiValue" text-anchor="middle">460800</text>
+      <text x="500" y="305" class="cn small">若不稳定可降到 115200</text>
+
+      <rect x="690" y="337" width="226" height="48" rx="12" fill="#689d6a"/>
+      <text x="803" y="369" class="cn" font-size="25" font-weight="900" text-anchor="middle" fill="#fbf1c7">START</text>
+      <text x="22" y="370" class="cn" font-size="22" font-weight="800" fill="#3c3836">确认文件、地址、COM 后，点击 START</text>
+    </g>
+  </g>
+
+  <!-- Step 4 -->
+  <g transform="translate(40 1470)" filter="url(#shadow)">
+    <rect width="1000" height="244" rx="28" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <circle cx="58" cy="58" r="34" fill="#b16286"/><text x="58" y="68" class="cn num">4</text>
+    <text x="112" y="67" class="cn stepTitle">看到 FINISH，复位进入游戏机</text>
+    <rect x="32" y="99" width="236" height="58" rx="14" fill="#689d6a"/>
+    <text x="150" y="138" class="cn" font-size="29" font-weight="900" text-anchor="middle" fill="#fbf1c7">FINISH</text>
+    <text x="302" y="124" class="cn body">烧录完成后按一下 EN / RST，</text>
+    <text x="302" y="161" class="cn body">或断电重连，等待 GAMEBOX 启动画面。</text>
+    <text x="32" y="207" class="cn small">整包约 5.68 MiB，包含 bootloader、分区表、v1.0.0 应用和英式发音包。</text>
+  </g>
+
+  <g transform="translate(40 1742)">
+    <rect width="1000" height="124" rx="24" fill="#3c3836"/>
+    <text x="28" y="43" class="cn" font-size="24" font-weight="800" fill="#fb4934">连不上时：</text>
+    <text x="156" y="43" class="cn" font-size="22" fill="#fbf1c7">按住 BOOT → 点按 EN / RST → 开始连接后松开 BOOT</text>
+    <text x="28" y="83" class="cn" font-size="21" fill="#ebdbb2">确认使用“COM”口、数据线可传输，并关闭占用 COM 的串口软件。</text>
+  </g>
+
+  <text x="42" y="1900" class="cn" font-size="18" fill="#928374">依据乐鑫官方 Flash Download Tool 指南整理 · 2026-08-29</text>
+  <text x="1040" y="1900" class="cn" font-size="19" fill="#928374" text-anchor="end">GAMEBOX / 3 of 4</text>
+</svg>

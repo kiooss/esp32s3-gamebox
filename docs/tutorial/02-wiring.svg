@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="7" stdDeviation="9" flood-color="#3c3836" flood-opacity="0.12"/>
+    </filter>
+    <style>
+      .cn { font-family: "PingFang SC", "Noto Sans CJK SC", sans-serif; }
+      .title { font-size: 70px; font-weight: 800; fill: #3c3836; }
+      .kicker { font-size: 25px; font-weight: 700; letter-spacing: 3px; fill: #d65d0e; }
+      .sub { font-size: 29px; fill: #665c54; }
+      .cardTitle { font-size: 32px; font-weight: 800; fill: #fbf1c7; }
+      .pin { font-size: 24px; font-weight: 650; fill: #3c3836; }
+      .note { font-size: 21px; fill: #665c54; }
+      .tiny { font-size: 19px; fill: #7c6f64; }
+      .rule { stroke: #d5c4a1; stroke-width: 2; }
+    </style>
+  </defs>
+
+  <rect width="1080" height="1920" fill="#fbf1c7"/>
+  <rect x="0" y="0" width="18" height="1920" fill="#458588"/>
+  <text x="46" y="76" class="cn kicker">DIY GAMEBOX · 新手制作指南</text>
+  <text x="42" y="155" class="cn title">02  完整接线</text>
+  <text x="1038" y="150" class="cn sub" text-anchor="end">断电后逐组连接</text>
+
+  <g transform="translate(40 190)">
+    <rect width="1000" height="104" rx="24" fill="#3c3836"/>
+    <text x="34" y="43" class="cn" font-size="26" font-weight="800" fill="#fb4934">上电前：</text>
+    <text x="150" y="43" class="cn" font-size="25" font-weight="700" fill="#fbf1c7">所有 GND 共地 · 核对 3V3 / 5V · 锂电池正负极不可接反</text>
+    <text x="34" y="78" class="cn" font-size="21" fill="#ebdbb2">线接完一组就复查一组；GPIO 写的是开发板丝印编号。</text>
+  </g>
+
+  <!-- 左列：屏幕 -->
+  <g transform="translate(40 322)" filter="url(#shadow)">
+    <rect width="490" height="510" rx="28" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <path d="M0 28Q0 0 28 0H462Q490 0 490 28V76H0Z" fill="#d65d0e"/>
+    <text x="28" y="50" class="cn cardTitle">ST7789 屏幕 · SPI2</text>
+    <g class="cn pin">
+      <text x="28" y="118">GND</text><text x="212" y="118">→</text><text x="262" y="118">GND</text>
+      <line x1="28" y1="138" x2="462" y2="138" class="rule"/>
+      <text x="28" y="174">VCC</text><text x="212" y="174">→</text><text x="262" y="174">3V3</text>
+      <text x="28" y="216">SCL / SCK</text><text x="212" y="216">→</text><text x="262" y="216">GPIO12</text>
+      <text x="28" y="258">SDA / MOSI</text><text x="212" y="258">→</text><text x="262" y="258">GPIO11</text>
+      <text x="28" y="300">RES / RST</text><text x="212" y="300">→</text><text x="262" y="300">GPIO13</text>
+      <text x="28" y="342">DC / RS</text><text x="212" y="342">→</text><text x="262" y="342">GPIO14</text>
+      <text x="28" y="384">CS</text><text x="212" y="384">→</text><text x="262" y="384">GPIO10</text>
+      <text x="28" y="426">BLK / LED</text><text x="212" y="426">→</text><text x="262" y="426">GPIO9</text>
+    </g>
+    <text x="28" y="475" class="cn note">GPIO12 / 11 / 10 是高速推屏固定脚位。</text>
+  </g>
+
+  <!-- 右列：手柄 -->
+  <g transform="translate(550 322)" filter="url(#shadow)">
+    <rect width="490" height="626" rx="28" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <path d="M0 28Q0 0 28 0H462Q490 0 490 28V76H0Z" fill="#458588"/>
+    <text x="28" y="50" class="cn cardTitle">JoyStick Shield · 6×2 接口</text>
+    <text x="28" y="108" class="cn note">黄色 6×2 接口：</text>
+    <text x="28" y="137" class="cn note">上排 V A C E K X / 下排 G B D F 3 Y</text>
+    <g class="cn pin">
+      <text x="28" y="172">G</text><text x="182" y="172">→</text><text x="230" y="172">GND</text>
+      <text x="28" y="211">3</text><text x="182" y="211">→</text><text x="230" y="211">3V3</text>
+      <text x="28" y="250">X / 摇杆横轴</text><text x="182" y="250">→</text><text x="300" y="250">GPIO1</text>
+      <text x="28" y="289">Y / 摇杆纵轴</text><text x="182" y="289">→</text><text x="300" y="289">GPIO2</text>
+      <text x="28" y="328">A / 上键</text><text x="182" y="328">→</text><text x="300" y="328">GPIO15</text>
+      <text x="28" y="367">B / 右键</text><text x="182" y="367">→</text><text x="300" y="367">GPIO16</text>
+      <text x="28" y="406">C / 下键</text><text x="182" y="406">→</text><text x="300" y="406">GPIO17</text>
+      <text x="28" y="445">D / 左键</text><text x="182" y="445">→</text><text x="300" y="445">GPIO18</text>
+      <text x="28" y="484">F / SELECT</text><text x="182" y="484">→</text><text x="300" y="484">GPIO8</text>
+      <text x="28" y="523">E / START</text><text x="182" y="523">→</text><text x="300" y="523">GPIO7</text>
+    </g>
+    <rect x="24" y="552" width="442" height="50" rx="14" fill="#f2e5bc"/>
+    <text x="38" y="585" class="cn" font-size="22" font-weight="800" fill="#cc241d">左侧选择开关拨到 3V3；V、K 不接。</text>
+  </g>
+
+  <!-- 左列：音频 -->
+  <g transform="translate(40 854)" filter="url(#shadow)">
+    <rect width="490" height="386" rx="28" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <path d="M0 28Q0 0 28 0H462Q490 0 490 28V76H0Z" fill="#689d6a"/>
+    <text x="28" y="50" class="cn cardTitle">MAX98357 + 喇叭</text>
+    <g class="cn pin">
+      <text x="28" y="118">VIN / GND</text><text x="206" y="118">→</text><text x="252" y="118">3V3 / GND</text>
+      <text x="28" y="160">BCLK</text><text x="206" y="160">→</text><text x="252" y="160">GPIO4</text>
+      <text x="28" y="202">LRC / WS</text><text x="206" y="202">→</text><text x="252" y="202">GPIO5</text>
+      <text x="28" y="244">DIN</text><text x="206" y="244">→</text><text x="252" y="244">GPIO6</text>
+      <text x="28" y="286">SD / EN、GAIN</text><text x="206" y="286">→</text><text x="252" y="286">先悬空</text>
+      <text x="28" y="328">SPK+ / SPK−</text><text x="206" y="328">→</text><text x="252" y="328">喇叭两端</text>
+    </g>
+    <text x="28" y="365" class="cn note" fill="#cc241d">桥接输出：SPK+、SPK− 都不能接 GND。</text>
+  </g>
+
+  <!-- 右列：TF -->
+  <g transform="translate(550 970)" filter="url(#shadow)">
+    <rect width="490" height="382" rx="28" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <path d="M0 28Q0 0 28 0H462Q490 0 490 28V76H0Z" fill="#b16286"/>
+    <text x="28" y="50" class="cn cardTitle">microSD 模块 · SPI3</text>
+    <g class="cn pin">
+      <text x="28" y="120">3V3 / GND</text><text x="206" y="120">→</text><text x="252" y="120">3V3 / GND</text>
+      <text x="28" y="164">CS</text><text x="206" y="164">→</text><text x="252" y="164">GPIO42</text>
+      <text x="28" y="208">MOSI</text><text x="206" y="208">→</text><text x="252" y="208">GPIO41</text>
+      <text x="28" y="252">CLK</text><text x="206" y="252">→</text><text x="252" y="252">GPIO39</text>
+      <text x="28" y="296">MISO</text><text x="206" y="296">→</text><text x="252" y="296">GPIO40</text>
+    </g>
+    <rect x="24" y="318" width="442" height="44" rx="13" fill="#f2e5bc"/>
+    <text x="38" y="347" class="cn" font-size="21" font-weight="800" fill="#cc241d">仅限 3.3V 直通模块，接 5V 会损坏 TF 卡。</text>
+  </g>
+
+  <!-- 左列：供电 -->
+  <g transform="translate(40 1262)" filter="url(#shadow)">
+    <rect width="490" height="480" rx="28" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <path d="M0 28Q0 0 28 0H462Q490 0 490 28V76H0Z" fill="#d79921"/>
+    <text x="28" y="50" class="cn cardTitle">锂电池 + 5V/1A 充放模块</text>
+    <text x="28" y="112" class="cn note">端子位置不统一，请认功能丝印，不认外形。</text>
+    <g class="cn pin">
+      <text x="28" y="164">电池正极（红）</text><text x="218" y="164">→</text><text x="266" y="164">B+ / BAT+</text>
+      <text x="28" y="210">电池负极（黑）</text><text x="218" y="210">→</text><text x="266" y="210">B− / BAT−</text>
+      <text x="28" y="256">OUT+ / 5V</text><text x="218" y="256">→</text><text x="266" y="256">开关 → 5V/VIN</text>
+      <text x="28" y="302">OUT− / GND</text><text x="218" y="302">→</text><text x="266" y="302">ESP32 GND</text>
+    </g>
+    <rect x="24" y="330" width="442" height="124" rx="18" fill="#3c3836"/>
+    <text x="42" y="366" class="cn" font-size="22" font-weight="800" fill="#fabd2f">首次上电先空载测量：输出应约为 5V。</text>
+    <text x="42" y="403" class="cn" font-size="20" fill="#ebdbb2">烧录时先关闭电池输出；未经确认，不要把</text>
+    <text x="42" y="433" class="cn" font-size="20" fill="#ebdbb2">外部 5V 与 COM 口 USB 供电直接并联。</text>
+  </g>
+
+  <!-- 右列：上电顺序 -->
+  <g transform="translate(550 1374)" filter="url(#shadow)">
+    <rect width="490" height="368" rx="28" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <path d="M0 28Q0 0 28 0H462Q490 0 490 28V76H0Z" fill="#3c3836"/>
+    <text x="28" y="50" class="cn cardTitle">第一次上电顺序</text>
+    <g class="cn">
+      <circle cx="48" cy="119" r="22" fill="#d65d0e"/><text x="48" y="127" font-size="23" font-weight="800" text-anchor="middle" fill="#fbf1c7">1</text>
+      <text x="85" y="128" class="pin">万用表确认电源模块输出约 5V</text>
+      <circle cx="48" cy="177" r="22" fill="#458588"/><text x="48" y="185" font-size="23" font-weight="800" text-anchor="middle" fill="#fbf1c7">2</text>
+      <text x="85" y="186" class="pin">只接开发板，确认可正常启动</text>
+      <circle cx="48" cy="235" r="22" fill="#689d6a"/><text x="48" y="243" font-size="23" font-weight="800" text-anchor="middle" fill="#fbf1c7">3</text>
+      <text x="85" y="244" class="pin">按屏、手柄、音频、TF 逐组接入</text>
+      <circle cx="48" cy="293" r="22" fill="#b16286"/><text x="48" y="301" font-size="23" font-weight="800" text-anchor="middle" fill="#fbf1c7">4</text>
+      <text x="85" y="302" class="pin">每加一组就上电测试一次</text>
+    </g>
+    <text x="28" y="344" class="cn tiny">这样出问题时，能立刻知道是哪一组接线。</text>
+  </g>
+
+  <text x="42" y="1813" class="cn" font-size="25" font-weight="800" fill="#3c3836">共同规则：</text>
+  <text x="176" y="1813" class="cn" font-size="24" fill="#665c54">所有模块 GND 必须与 ESP32 GND 相连；接线、插拔 TF 卡前先断电。</text>
+  <text x="1040" y="1902" class="cn" font-size="19" fill="#928374" text-anchor="end">GAMEBOX / 2 of 4</text>
+</svg>

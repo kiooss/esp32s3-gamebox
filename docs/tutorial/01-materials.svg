@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <defs>
+    <clipPath id="heroClip"><rect x="40" y="210" width="1000" height="690" rx="34"/></clipPath>
+    <linearGradient id="heroFade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0.55" stop-color="#282828" stop-opacity="0"/>
+      <stop offset="1" stop-color="#282828" stop-opacity="0.72"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#3c3836" flood-opacity="0.14"/>
+    </filter>
+    <style>
+      .cn { font-family: "PingFang SC", "Noto Sans CJK SC", sans-serif; }
+      .title { font-size: 70px; font-weight: 800; fill: #3c3836; }
+      .kicker { font-size: 25px; font-weight: 700; letter-spacing: 3px; fill: #d65d0e; }
+      .sub { font-size: 29px; fill: #665c54; }
+      .section { font-size: 36px; font-weight: 800; fill: #3c3836; }
+      .cardTitle { font-size: 31px; font-weight: 800; fill: #3c3836; }
+      .body { font-size: 24px; fill: #504945; }
+      .small { font-size: 21px; fill: #665c54; }
+      .num { font-size: 25px; font-weight: 800; fill: #fbf1c7; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect width="1080" height="1920" fill="#fbf1c7"/>
+  <rect x="0" y="0" width="18" height="1920" fill="#d65d0e"/>
+
+  <text x="46" y="76" class="cn kicker">DIY GAMEBOX · 新手制作指南</text>
+  <text x="42" y="155" class="cn title">01  材料清单</text>
+  <text x="1038" y="150" class="cn sub" text-anchor="end">先备齐，再动手</text>
+
+  <g filter="url(#shadow)">
+    <image x="40" y="210" width="1000" height="690" href="assets/parts-hero.png" clip-path="url(#heroClip)"/>
+    <rect x="40" y="210" width="1000" height="690" rx="34" fill="url(#heroFade)"/>
+  </g>
+  <text x="78" y="835" class="cn" font-size="32" font-weight="800" fill="#fbf1c7">核心电子件 + 供电 + 装配耗材</text>
+  <text x="78" y="871" class="cn" font-size="22" fill="#ebdbb2">插图只用于辨认类别，购买时请按下面的型号与规格核对</text>
+
+  <text x="42" y="968" class="cn section">采购清单</text>
+
+  <g transform="translate(40 1000)" filter="url(#shadow)">
+    <rect width="490" height="220" rx="26" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <circle cx="42" cy="44" r="25" fill="#d65d0e"/><text x="42" y="53" class="cn num">1</text>
+    <text x="80" y="53" class="cn cardTitle">主控与屏幕</text>
+    <text x="30" y="104" class="cn body">ESP32-S3-DevKitC-1 ×1</text>
+    <text x="30" y="141" class="cn small">N16R8：16 MB Flash + 8 MB PSRAM</text>
+    <text x="30" y="181" class="cn body">ST7789 2.4英寸 SPI 屏 ×1</text>
+  </g>
+
+  <g transform="translate(550 1000)" filter="url(#shadow)">
+    <rect width="490" height="220" rx="26" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <circle cx="42" cy="44" r="25" fill="#458588"/><text x="42" y="53" class="cn num">2</text>
+    <text x="80" y="53" class="cn cardTitle">控制器</text>
+    <text x="30" y="108" class="cn body">JoyStick Shield V1.A ×1</text>
+    <text x="30" y="149" class="cn small">Arduino UNO 盾板，需用排线飞线</text>
+    <text x="30" y="184" class="cn small">左侧电压选择开关必须拨到 3V3</text>
+  </g>
+
+  <g transform="translate(40 1242)" filter="url(#shadow)">
+    <rect width="490" height="220" rx="26" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <circle cx="42" cy="44" r="25" fill="#689d6a"/><text x="42" y="53" class="cn num">3</text>
+    <text x="80" y="53" class="cn cardTitle">音频</text>
+    <text x="30" y="108" class="cn body">MAX98357 I2S 功放 ×1</text>
+    <text x="30" y="149" class="cn body">小喇叭 ×1</text>
+    <text x="30" y="184" class="cn small">喇叭两端接 SPK+ / SPK−，不接地</text>
+  </g>
+
+  <g transform="translate(550 1242)" filter="url(#shadow)">
+    <rect width="490" height="220" rx="26" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <circle cx="42" cy="44" r="25" fill="#b16286"/><text x="42" y="53" class="cn num">4</text>
+    <text x="80" y="53" class="cn cardTitle">游戏存储</text>
+    <text x="30" y="108" class="cn body">3.3V 直通型 microSD 模块 ×1</text>
+    <text x="30" y="149" class="cn body">TF 卡 ×1</text>
+    <text x="30" y="184" class="cn small">模块无 LDO / 电平转换，严禁接 5V</text>
+  </g>
+
+  <g transform="translate(40 1484)" filter="url(#shadow)">
+    <rect width="490" height="220" rx="26" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <circle cx="42" cy="44" r="25" fill="#d79921"/><text x="42" y="53" class="cn num">5</text>
+    <text x="80" y="53" class="cn cardTitle">便携供电</text>
+    <text x="30" y="108" class="cn body">3.7V 聚合物锂电池 ×1</text>
+    <text x="30" y="149" class="cn body">5V / 1A 充放一体模块 ×1</text>
+    <text x="30" y="184" class="cn small">建议另备电源开关；确认带保护功能</text>
+  </g>
+
+  <g transform="translate(550 1484)" filter="url(#shadow)">
+    <rect width="490" height="220" rx="26" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <circle cx="42" cy="44" r="25" fill="#8f3f71"/><text x="42" y="53" class="cn num">6</text>
+    <text x="80" y="53" class="cn cardTitle">线材与工具</text>
+    <text x="30" y="108" class="cn body">杜邦线 / 排线、USB-C 数据线</text>
+    <text x="30" y="149" class="cn body">烙铁、焊锡、热缩管或绝缘胶带</text>
+    <text x="30" y="184" class="cn small">万用表强烈建议准备，先测再上电</text>
+  </g>
+
+  <g transform="translate(40 1740)">
+    <rect width="1000" height="132" rx="26" fill="#3c3836"/>
+    <circle cx="53" cy="49" r="24" fill="#fb4934"/>
+    <text x="53" y="58" class="cn" font-size="28" font-weight="900" text-anchor="middle" fill="#3c3836">!</text>
+    <text x="92" y="55" class="cn" font-size="27" font-weight="800" fill="#fbf1c7">买之前先核对三件事</text>
+    <text x="92" y="95" class="cn" font-size="22" fill="#ebdbb2">屏幕与 TF 模块是 3.3V；充放电模块稳定输出 5V；电池带保护且插头极性一致。</text>
+  </g>
+  <text x="1040" y="1902" class="cn" font-size="19" fill="#928374" text-anchor="end">GAMEBOX / 1 of 4</text>
+</svg>

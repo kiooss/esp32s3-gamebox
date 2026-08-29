@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="7" stdDeviation="9" flood-color="#3c3836" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#928374"/>
+    </marker>
+    <style>
+      .cn { font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+      .title { font-size: 70px; font-weight: 800; fill: #3c3836; }
+      .kicker { font-size: 25px; font-weight: 700; letter-spacing: 3px; fill: #d65d0e; }
+      .sub { font-size: 27px; fill: #665c54; }
+      .section { font-size: 31px; font-weight: 800; fill: #3c3836; }
+      .body { font-size: 23px; fill: #504945; }
+      .small { font-size: 20px; fill: #665c54; }
+      .tiny { font-size: 18px; fill: #7c6f64; }
+      .label { font-size: 21px; font-weight: 800; fill: #3c3836; }
+      .num { font-size: 28px; font-weight: 900; fill: #fbf1c7; text-anchor: middle; }
+      .check { font-size: 23px; font-weight: 700; fill: #3c3836; }
+    </style>
+  </defs>
+
+  <rect width="1080" height="1920" fill="#fbf1c7"/>
+  <rect width="18" height="1920" fill="#689d6a"/>
+  <text x="46" y="76" class="cn kicker">DIY GAMEBOX · 新手制作指南</text>
+  <text x="42" y="155" class="cn title">04  装机与验收</text>
+  <text x="1038" y="150" class="cn sub" text-anchor="end">先测试，再封壳</text>
+
+  <g transform="translate(40 190)">
+    <rect width="1000" height="104" rx="24" fill="#3c3836"/>
+    <text x="34" y="43" class="cn" font-size="26" font-weight="800" fill="#b8bb26">装壳前必须整机跑通</text>
+    <text x="34" y="80" class="cn" font-size="22" fill="#fbf1c7">否则封壳后再查错，会分不清是接线、挤压还是固定方式造成的故障。</text>
+  </g>
+
+  <!-- Step 1 -->
+  <g transform="translate(40 322)" filter="url(#shadow)">
+    <rect width="1000" height="218" rx="28" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <circle cx="58" cy="58" r="34" fill="#d65d0e"/><text x="58" y="68" class="cn num">1</text>
+    <text x="112" y="67" class="cn section">桌面预检：所有模块先摊开运行</text>
+    <text x="32" y="120" class="cn body">烧好合并固件，接上屏幕、手柄、功放、TF 和电源模块。</text>
+    <text x="32" y="160" class="cn body">确认能进入 GAME / WORDS / SETTINGS，再开始量尺寸和装壳。</text>
+    <text x="32" y="197" class="cn small">上电时手不要碰摇杆；开机会采样中心位置，碰着可能导致手柄被禁用。</text>
+  </g>
+
+  <!-- Step 2 exploded view -->
+  <g transform="translate(40 568)" filter="url(#shadow)">
+    <rect width="1000" height="430" rx="28" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <circle cx="58" cy="58" r="34" fill="#458588"/><text x="58" y="68" class="cn num">2</text>
+    <text x="112" y="67" class="cn section">分三层布局，先留接口和活动空间</text>
+
+    <!-- exploded layers -->
+    <g transform="translate(34 98)">
+      <rect x="0" y="0" width="470" height="88" rx="19" fill="#d8ded1" stroke="#689d6a" stroke-width="3"/>
+      <rect x="28" y="18" width="150" height="52" rx="7" fill="#458588"/>
+      <rect x="48" y="27" width="110" height="34" rx="3" fill="#282828"/>
+      <circle cx="245" cy="44" r="28" fill="#3c3836"/><circle cx="315" cy="31" r="14" fill="#d79921"/>
+      <circle cx="352" cy="31" r="14" fill="#d65d0e"/><circle cx="315" cy="61" r="14" fill="#689d6a"/>
+      <circle cx="352" cy="61" r="14" fill="#458588"/>
+      <line x1="235" y1="94" x2="235" y2="121" stroke="#928374" stroke-width="3" marker-end="url(#arrow)"/>
+
+      <rect x="0" y="132" width="470" height="94" rx="19" fill="#d6e0e6" stroke="#458588" stroke-width="3"/>
+      <rect x="25" y="151" width="185" height="56" rx="9" fill="#3c3836"/>
+      <rect x="43" y="162" width="70" height="34" rx="5" fill="#bdae93"/>
+      <rect x="244" y="150" width="62" height="58" rx="8" fill="#b16286"/>
+      <circle cx="360" cy="179" r="34" fill="#504945"/><circle cx="360" cy="179" r="18" fill="#282828"/>
+      <line x1="235" y1="232" x2="235" y2="259" stroke="#928374" stroke-width="3" marker-end="url(#arrow)"/>
+
+      <rect x="0" y="270" width="470" height="88" rx="19" fill="#eee4c0" stroke="#d79921" stroke-width="3"/>
+      <rect x="28" y="287" width="188" height="54" rx="10" fill="#d9d4c7" stroke="#928374"/>
+      <rect x="28" y="287" width="188" height="10" rx="5" fill="#d79921"/>
+      <rect x="252" y="289" width="82" height="50" rx="8" fill="#689d6a"/>
+      <rect x="350" y="289" width="42" height="50" rx="8" fill="#504945"/>
+    </g>
+
+    <g transform="translate(540 112)">
+      <circle cx="16" cy="13" r="13" fill="#689d6a"/><text x="43" y="21" class="cn label">A：屏幕、摇杆与按键</text>
+      <text x="43" y="55" class="cn small">屏幕排线不折死；摇杆四周能自由活动。</text>
+      <circle cx="16" cy="101" r="13" fill="#458588"/><text x="43" y="109" class="cn label">B：ESP32、TF、功放、喇叭</text>
+      <text x="43" y="143" class="cn small">COM 口、TF 卡槽和 EN / BOOT 要能触及。</text>
+      <text x="43" y="174" class="cn small">喇叭正面留出音孔，不要紧贴电池。</text>
+      <circle cx="16" cy="220" r="13" fill="#d79921"/><text x="43" y="228" class="cn label">C：电池、充放模块、电源开关</text>
+      <text x="43" y="262" class="cn small">电池平放，远离尖角、焊点和螺丝尾部。</text>
+      <text x="43" y="293" class="cn small">充电口与开关需从外壳边缘正常操作。</text>
+    </g>
+  </g>
+
+  <!-- Step 3 -->
+  <g transform="translate(40 1026)" filter="url(#shadow)">
+    <rect width="1000" height="314" rx="28" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <circle cx="58" cy="58" r="34" fill="#d79921"/><text x="58" y="68" class="cn num">3</text>
+    <text x="112" y="67" class="cn section">固定、绝缘，再做一次短路检查</text>
+
+    <g transform="translate(32 101)">
+      <rect width="452" height="174" rx="19" fill="#f2e5bc"/>
+      <text x="22" y="38" class="cn label">机械固定</text>
+      <text x="22" y="76" class="cn body">• 主板用尼龙隔离柱或螺丝固定</text>
+      <text x="22" y="113" class="cn body">• 电池用软质泡棉双面胶平贴</text>
+      <text x="22" y="150" class="cn body">• 线束扎紧，但给插头留应力余量</text>
+    </g>
+    <g transform="translate(516 101)">
+      <rect width="452" height="174" rx="19" fill="#e4eadb"/>
+      <text x="22" y="38" class="cn label">电气检查</text>
+      <text x="22" y="76" class="cn body">• 裸露焊点套热缩管或绝缘片</text>
+      <text x="22" y="113" class="cn body">• 断电测 5V–GND 无明显短路</text>
+      <text x="22" y="150" class="cn body">• 空载确认充放模块输出约 5V</text>
+    </g>
+  </g>
+
+  <!-- Step 4 acceptance -->
+  <g transform="translate(40 1368)" filter="url(#shadow)">
+    <rect width="1000" height="350" rx="28" fill="#f9f5d7" stroke="#d5c4a1" stroke-width="3"/>
+    <circle cx="58" cy="58" r="34" fill="#b16286"/><text x="58" y="68" class="cn num">4</text>
+    <text x="112" y="67" class="cn section">最终验收：六项全部通过才封壳</text>
+
+    <g transform="translate(32 103)">
+      <rect width="28" height="28" rx="5" fill="#fff" stroke="#689d6a" stroke-width="3"/>
+      <text x="45" y="23" class="cn check">供电：电池启动、充电指示正常</text>
+      <text x="45" y="53" class="cn tiny">无异常发热、异味或自动重启</text>
+
+      <rect x="0" y="78" width="28" height="28" rx="5" fill="#fff" stroke="#689d6a" stroke-width="3"/>
+      <text x="45" y="101" class="cn check">显示：方向、颜色、背光正常</text>
+      <text x="45" y="131" class="cn tiny">启动页显示 v1.0.0，菜单无花屏闪烁</text>
+
+      <rect x="0" y="156" width="28" height="28" rx="5" fill="#fff" stroke="#689d6a" stroke-width="3"/>
+      <text x="45" y="179" class="cn check">控制：摇杆与全部按键响应</text>
+      <text x="45" y="209" class="cn tiny">在 SETTINGS → Controller Test 检查</text>
+    </g>
+
+    <g transform="translate(516 103)">
+      <rect width="28" height="28" rx="5" fill="#fff" stroke="#689d6a" stroke-width="3"/>
+      <text x="45" y="23" class="cn check">TF：能扫描平台并加载游戏</text>
+      <text x="45" y="53" class="cn tiny">再验证一次存档与读档</text>
+
+      <rect x="0" y="78" width="28" height="28" rx="5" fill="#fff" stroke="#689d6a" stroke-width="3"/>
+      <text x="45" y="101" class="cn check">音频：游戏与单词发音清楚</text>
+      <text x="45" y="131" class="cn tiny">调音量时无持续杂音或破音</text>
+
+      <rect x="0" y="156" width="28" height="28" rx="5" fill="#fff" stroke="#689d6a" stroke-width="3"/>
+      <text x="45" y="179" class="cn check">稳定：高负载游戏连续 10 分钟</text>
+      <text x="45" y="209" class="cn tiny">建议用 MD / SNES；无卡死、复位或背光闪烁</text>
+    </g>
+  </g>
+
+  <g transform="translate(40 1746)">
+    <rect width="1000" height="122" rx="24" fill="#3c3836"/>
+    <circle cx="52" cy="48" r="24" fill="#fb4934"/>
+    <text x="52" y="57" class="cn" font-size="28" font-weight="900" text-anchor="middle" fill="#3c3836">!</text>
+    <text x="91" y="48" class="cn" font-size="24" font-weight="800" fill="#fb4934">锂电池禁止挤压、弯折、打孔，不能被螺丝顶住。</text>
+    <text x="91" y="84" class="cn" font-size="20" fill="#ebdbb2">发现鼓包、异常发热、异味、嘶嘶声或烟雾：立即停用并远离可燃物。</text>
+  </g>
+
+  <text x="42" y="1900" class="cn" font-size="18" fill="#928374">GAMEBOX 装机检查表 · 2026-08-29</text>
+  <text x="1040" y="1900" class="cn" font-size="19" fill="#928374" text-anchor="end">GAMEBOX / 4 of 4</text>
+</svg>
