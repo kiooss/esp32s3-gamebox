@@ -13,5 +13,5 @@ bool rom_favorites_contains(const rom_store_entry_t *entry);
 /* 返回 ESP_OK 才表示已落盘并改变查询结果。失败保留修改前的内存与有效旧文件。 */
 esp_err_t rom_favorites_toggle(const rom_store_entry_t *entry);
 
-/* 离开菜单后归还 PSRAM，不删除卡上的收藏；之后允许重新 init。 */
+/* 启动模拟器前归还 PSRAM，不删除卡上的收藏；之后允许重新 init。 */
 void rom_favorites_deinit(void);

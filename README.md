@@ -54,7 +54,7 @@ ROM 说明：商业 NES/GB/GBC/SNES/Genesis ROM 都是版权物，**本仓库不
 
 | 文件 | 作用 |
 |---|---|
-| `main/main.c` | 启动流程：板级信息 → 初始化屏 → GAME / WORDS / SETTINGS 分流 |
+| `main/main.c` | 启动流程：等待页完成输入、目录和收藏准备 → GAME / WORDS / SETTINGS 分流 |
 | `main/word_study.c` | 教材/单元选择、单词认读/三选一测验与分册 NVS 进度 |
 | `main/word_study_data.c` | 译林版三至六年级上下册词表；三上为教材完整表，其余暂为核心词 |
 | `main/word_audio.c` | 读取独立分区中的英式发音索引，流式解码 IMA ADPCM 并异步播放 |
@@ -241,7 +241,12 @@ ROM 是选中之后才从卡上整个读进 PSRAM 的；ZIP 也在这时才识�
 换一张正常的 SDHC 卡这些数字会小一个量级。想量自己手上这张，把
 `main/sd_card.c` 的 `SD_BENCHMARK` 打开，判读方法写在那个函数的注释里。
 
-开机首页先选 **GAME / WORDS / SETTINGS**：GAME 进入游戏，WORDS 进入离线单词学习，
+开机先显示“正在启动”和当前准备阶段，声音、手柄、游戏目录及收藏读取结束后，
+才播放入场动画并显示 **GAME / WORDS / SETTINGS** 首页。首次扫描或按住 SELECT
+重扫时会一直停留在等待页，准备期间的串口按键不会在首页出现后误触发操作。
+未插 TF 卡时仍能进入单词学习和设置，GAME 按原规则使用内置游戏。
+
+首页中 GAME 进入游戏，WORDS 进入离线单词学习，
 SETTINGS 调节音量、背光并进入手柄诊断。游戏选单分两级：**平台选择页**
 （NES / GB / GBC / SNES / MD / PCE，各带游戏数）
 采用 2×3 卡片网格，按 A 进入该平台的**游戏列表**；列表每页 8 项，编号独立显示

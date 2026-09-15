@@ -480,7 +480,8 @@ rom_menu_result_t rom_menu_pick(const rom_store_entry_t **entry)
              * app_main，不能冒充“没有 ROM”，否则会误启动编译期内置游戏。 */
             if (edge & NES_PAD_B) {
                 ui_sound_back();
-                rom_favorites_deinit();
+                /* 返回首页仍保留已读收藏，下一次进入 GAME 不应再等一次读卡。
+                 * 真正启动模拟器时才释放，给游戏的大块 PSRAM 分配让路。 */
                 return ROM_MENU_BACK;
 
             } else if (edge & NES_PAD_SELECT) {

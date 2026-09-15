@@ -66,7 +66,11 @@ idf.py flash-word-audio                                   # 只在教材词表/�
 
 ## 架构
 
-启动链：`app_main`（main.c）→ `nes_emu_prealloc` → `display_init` → GAME/WORDS/SETTINGS；
+启动链：`app_main`（main.c）→ `nes_emu_prealloc` → 挂卡 → `display_init` →
+启动等待页（声音、三路输入、游戏目录、收藏）→ 入场动画 → GAME/WORDS/SETTINGS。
+首页必须在这些准备工作全部完成或确定回退后才出现；不能把读目录/收藏推迟到
+第一次进入 GAME 或 Controller Test。SELECT 重扫键在读目录前采样，进入首页前
+丢弃等待期间的串口按键；没有 TF 卡仍可进入 WORDS/SETTINGS，GAME 使用内置 ROM。
 WORDS 在 `word_study_run()` 内可反复换年级、册次和单元；三上按教材 Word lists
 完整收录 127 项（各单元 13/11/17/9/18/12/31/16），其余分册暂为每单元 8 个核心词；
 卡片正面自动播放英式发音，X 可重播，QUIZ 判题时答对/答错分别播放上升/下降
@@ -82,7 +86,8 @@ Controller Test 集中在 SETTINGS，选定游戏后进入对应模拟器（不�
 `rom_favorites.c` 以完整 ROM/ZIP 外层路径为键，在 TF 根目录 `.gamebox-favorites`
 单独保存（临时文件 + `.bak` 备份 + 完整性校验），不能把收藏绑在易变的目录序号上，
 也不能因收藏读写重扫卡或重写 ROM 索引。落盘成功后才更新星标；只展示当前目录中
-存在的收藏，但保留暂时缺失路径的记录。菜单退出时释放收藏占用的 PSRAM。
+存在的收藏，但保留暂时缺失路径的记录。返回首页继续复用已读收藏，启动模拟器前
+才释放收藏占用的 PSRAM，避免反复进入 GAME 又等待读卡。
 
 ### 双核分工与「条带流式推屏」
 

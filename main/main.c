@@ -1,7 +1,7 @@
 /*
  * 在 ESP32-S3 + ST7789（240x320）上运行 NES / GB / GBC / SNES / Genesis
  *
- * 流程：打印板级信息 -> 初始化屏 -> 选择 GAME/WORDS/SETTINGS -> 学习或启动模拟器
+ * 流程：启动等待页 -> 完成输入、游戏目录和收藏准备 -> GAME/WORDS/SETTINGS
  *
  * 接线见 display.h 顶部。换屏或显示不正常时改那里的宏，不用动这个文件。
  * 把 SHOW_DISPLAY_SELFTEST 改成 1 可以在启动模拟器前先跑一遍点屏诊断图。
@@ -31,6 +31,7 @@
 #include "snes_emu.h"
 #include "genesis_emu.h"
 #include "rom_menu.h"
+#include "rom_favorites.h"
 #include "ui_sound.h"
 #include "overclock.h"
 #include "sd_card.h"
@@ -206,12 +207,8 @@ static void draw_wordmark(int y)
  * （y = BOOT_WORDMARK_Y），动画结束后它原地不动，菜单其余部分在它下面补齐 ——
  * 视觉上是一个连续的过程，不是两屏。
  *
- * ⚠ 这段必须跑在 input_*_init() **之前**：显示就绪到手柄初始化完成之间有约
- * 0.68 秒（USB host 那段最慢），原来是靠开机画面的最终帧挡着的。把动画整个
- * 挪到 boot_menu() 里就会在那 0.68 秒露出黑屏，看着像卡住。所以动画在这里
- * 放完，之后那 0.68 秒由落定的字标继续占屏。
- *
- * 也因此这段**没法做成按键跳过** —— 输入子系统还没初始化。0.46 秒，够短。
+ * 动画只在启动准备全部结束后播放，并立即接上模式选择页。输入初始化、
+ * 游戏目录扫描和收藏读取期间统一显示等待页，不能先露出菜单再让它等读卡。
  *
  * ⚠ 整份绘制列表每帧会被逐条带调用 7 次（见 display.h），所以动画状态必须
  * 放在 ctx 里由调用方算好，不能在绘制函数里自增 —— 那样一帧之内七个条带
@@ -277,14 +274,13 @@ static uint32_t chime_due(int64_t t0, uint32_t total)
     return due > total ? total : due;
 }
 
-static void boot_intro(void)
+static void boot_intro(bool sound)
 {
-    /* 上电音就该在上电那一刻响，所以音效和动画同时开始。
+    /* 声音设备已在准备阶段初始化；提示音和入场动画一起表示可以开始操作。
      *
      * ⚠ 必须按真实经过时间分批喂，不能一次灌完：audio_output 的队列只有
      * AUDIO_QUEUE_FRAMES(4) 个包、约 88 ms，一次性提交剩下的会被直接丢掉
      * （那条接口队列满时丢包并计数，不阻塞）。 */
-    bool sound = audio_output_init(CHIME_RATE) == ESP_OK;
     uint32_t total = ui_sound_ms(UI_SOUND_BOOT, UI_SOUND_BOOT_COUNT)
                    * CHIME_RATE / 1000;
     uint32_t sent = 0;
@@ -325,10 +321,35 @@ static void boot_intro(void)
     }
 }
 
-/* loading 那 1.5 秒过完之后，开机画面停下来问 GAME/WORDS/SETTINGS，不再自动往下走——
- * 之前是只要 PAD_DIAG_SCREEN=1（编译期开关）就每次开机都强制看一遍摇杆
- * 诊断画面，想跳过看不了。现在交给玩家自己选：GAME 直接进 ROM 菜单，
- * SETTINGS 统一放音量、亮度和 input_gamepad_show() 那套摇杆/按键测试。 */
+/* 等待页没有可操作控件，也不靠固定延时猜测什么时候完成。只有当前阶段的
+ * 同步初始化返回后才进入下一步，慢卡完整扫描期间仍明确显示正在准备。 */
+static void boot_prepare_strip(uint16_t *strip, int y0, int h, void *ctx)
+{
+    (void)strip;
+    (void)y0;
+    (void)h;
+    const char *stage = *(const char *const *)ctx;
+    const char *title = "正在启动";
+    const char *hint = "准备完成后自动进入";
+
+    display_clear(C_UI_BG);
+    display_rect(0, 0, DISP_FB_W, DISP_FB_H, C_UI_EDGE);
+    display_text_16((DISP_FB_W - display_text_width_16(title)) / 2, 75,
+                    title, C_UI_FG);
+    display_text_16((DISP_FB_W - display_text_width_16(stage)) / 2, 105,
+                    stage, C_UI_FG_DIM);
+    display_text_16((DISP_FB_W - display_text_width_16(hint)) / 2, 167,
+                    hint, C_UI_FG_FAINT);
+}
+
+static void boot_show_preparing(const char *stage)
+{
+    ESP_LOGI(TAG, "启动准备：%s", stage);
+    display_stream_sync(boot_prepare_strip, &stage);
+}
+
+/* 准备结束后才进入可操作的模式选择页。GAME 的目录已经就绪，SETTINGS 的
+ * Controller Test 同样复用这份目录，不再在用户确认之后阻塞扫描。 */
 #define BOOT_MENU_POLL_MS 16   /* 和 rom_menu.c 的 POLL_MS 同一个量级 */
 
 typedef enum {
@@ -499,7 +520,7 @@ static void settings_strip(uint16_t *strip, int y0, int h, void *ctx)
                     "A进入测试  B返回", C_UI_FG_FAINT);
 }
 
-static void settings_menu(bool *refresh_rom_index)
+static void settings_menu(void)
 {
     int selected = SETTINGS_VOLUME;
     bool volume_preview_active = false;
@@ -547,14 +568,10 @@ static void settings_menu(bool *refresh_rom_index)
         } else if (selected == SETTINGS_TEST &&
                    (edge & (NES_PAD_A | NES_PAD_START))) {
             ui_sound_enter();
-            /* TEST 原来在主页；只在真正进入诊断时才碰 ROM 目录，WORDS 和普通
-             * 设置路径仍不会承担 SD 全盘扫描。 */
             if (volume_preview_active) {
                 word_audio_shutdown();
                 volume_preview_active = false;
             }
-            rom_store_init(*refresh_rom_index);
-            *refresh_rom_index = false;
             input_gamepad_show();
             display_stream_sync(settings_strip, &selected);
             prev = input_serial_poll() | input_gamepad_poll() | input_usb_poll();
@@ -568,6 +585,7 @@ static boot_mode_t boot_menu(void)
 {
     int selected = 0;
     display_stream_sync(boot_menu_strip, &selected);
+    ESP_LOGI(TAG, "模式选择页已显示");
 
     uint16_t prev = input_serial_poll() | input_gamepad_poll() | input_usb_poll();
     while (1) {
@@ -590,6 +608,7 @@ static boot_mode_t boot_menu(void)
 
 void app_main(void)
 {
+    int64_t startup_started = esp_timer_get_time();
 #if OVERCLOCK_LEVEL != 0
     overclock_apply(OVERCLOCK_LEVEL);
 #endif
@@ -620,16 +639,12 @@ void app_main(void)
         return;
     }
 
-#if SHOW_DISPLAY_SELFTEST
-    screen_diagnostic();
-#endif
-    boot_intro();
+    /* 保留声音早于 USB/摇杆的内存分配顺序，避免把它的内部 DMA 空间碎片化。
+     * 入场音稍后才播放；准备阶段只能看到没有控件的等待提示。 */
+    boot_show_preparing("正在准备声音");
+    bool sound = audio_output_init(CHIME_RATE) == ESP_OK;
 
-    /* boot_menu() 要读输入，所以三路输入源在这里先装好；rom_menu_pick()
-     * 里还会再调一遍，都是幂等的，不会重复初始化出问题。
-     *
-     * WORDS 完全离线，不应该为了学单词先等一次 ROM 全盘扫描。因此先选模式，
-     * 只有 GAME 或 SETTINGS 里真正进入 Controller Test 时才初始化 ROM 目录。 */
+    boot_show_preparing("正在准备手柄");
     input_serial_init();
     input_usb_init();
     input_gamepad_init();
@@ -638,6 +653,29 @@ void app_main(void)
     if (refresh_rom_index) {
         ESP_LOGI(TAG, "检测到 SELECT，忽略 ROM 目录缓存并完整重扫");
     }
+
+    /* SELECT 在耗时读卡前采样，玩家看见重扫日志即可松手。目录和收藏都在
+     * 首页出现之前准备好，进入 GAME 后的首帧就能显示完整数量和收藏状态。 */
+    boot_show_preparing(refresh_rom_index ? "正在刷新游戏列表" : "正在读取游戏列表");
+    int rom_count = rom_store_init(refresh_rom_index);
+    if (rom_count > 0) {
+        boot_show_preparing("正在读取收藏");
+        esp_err_t err = rom_favorites_init();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "收藏暂不可用，保留原文件并允许进入其他功能：%s",
+                     esp_err_to_name(err));
+        }
+    }
+
+    ESP_LOGI(TAG, "启动准备完成：%d 个游戏，耗时 %lld ms，即将显示模式选择页",
+             rom_count, (long long)((esp_timer_get_time() - startup_started) / 1000));
+#if SHOW_DISPLAY_SELFTEST
+    screen_diagnostic();
+#endif
+    boot_intro(sound);
+    /* 慢卡扫描期间串口可能积压了按键，清掉后再显示首页，避免刚出现就被
+     * 之前的确认键带走。实体手柄的长按由 boot_menu() 的输入基线抑制。 */
+    input_serial_discard();
     /* 开机选单只返回目录项；各模拟器在自己的大块内存准备妥当后再从卡上读，
      * SNES 尤其不能先读出 4 MiB 再复制一份，否则 8 MiB PSRAM 会在峰值时耗尽。
      * 卡不可用时 entry 留 NULL，NES 继续走编译期嵌入 ROM 的回退路径。 */
@@ -649,12 +687,9 @@ void app_main(void)
             continue;
         }
         if (boot_mode == BOOT_MODE_SETTINGS) {
-            settings_menu(&refresh_rom_index);
+            settings_menu();
             continue;
         }
-
-        rom_store_init(refresh_rom_index);
-        refresh_rom_index = false;  /* 同一次开机只强制重扫一次，返回菜单不再重扫 */
 
         rom_menu_result_t menu_result = rom_menu_pick(&entry);
         if (menu_result == ROM_MENU_BACK) continue;

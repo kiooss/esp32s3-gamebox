@@ -118,6 +118,16 @@ void input_serial_init(void)
     printf("  注意：串口没有「松手」事件，按住不放靠终端的按键重复维持\n\n");
 }
 
+void input_serial_discard(void)
+{
+    /* 启动等待时积压的字符不能变成首页出现后的新操作。转义序列和保持状态
+     * 也必须一起清掉，否则残留方向键前缀会吞掉玩家就绪后第一次按键。 */
+    uart_flush_input(UART_NUM_0);
+    release_all();
+    s_esc = 0;
+    s_last_state = 0;
+}
+
 uint16_t input_serial_poll(void)
 {
     uint8_t buf[32];
