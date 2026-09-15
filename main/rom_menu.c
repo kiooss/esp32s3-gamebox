@@ -12,7 +12,8 @@
  * 回调只负责按当前页面类型绘制。
  *
  * B 在两页都只有“返回上一级”一个含义，避免孩子记两套规则。音量、亮度和
- * 手柄测试统一收进开机主页的 SETTINGS，不再把 X/Y 变成选单专用键。
+ * 手柄测试统一收进开机主页的 SETTINGS。平台页 SELECT 打开跨平台收藏，
+ * 游戏列表 X 收藏/取消；收藏复用列表页，六个平台仍保持原来的卡片布局。
  *
  * ---- 布局 ----
  *
@@ -36,6 +37,7 @@
 #include <string.h>
 #include "rom_menu.h"
 #include "rom_store.h"
+#include "rom_favorites.h"
 #include "display.h"
 #include "input_serial.h"
 #include "input_gamepad.h"
@@ -78,6 +80,7 @@ static uint16_t poll_input(void)
 typedef struct {
     rom_system_t system;
     int          count;
+    bool         favorites;
 } category_t;
 
 /* 条带回调的输入。整份绘制列表每帧会被逐条带调用 BAND_COUNT 次，每次只画到
@@ -99,6 +102,8 @@ typedef struct {
     rom_system_t systems[SYSTEM_COUNT];
     int   counts[SYSTEM_COUNT];
     char  lines[PAGE_ROWS][64];
+    bool  favorites[PAGE_ROWS];
+    const char *empty_text;
 } draw_args_t;
 
 static const char *system_name(rom_system_t system)
@@ -239,6 +244,13 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
                              active ? C_UI_FG_INV : accent);
         }
     } else {
+        if (a->empty_text) {
+            display_text_16((DISP_FB_W - display_text_width_16(a->empty_text)) / 2,
+                            91, a->empty_text, C_UI_FG_DIM);
+            const char *hint = "在游戏列表按 X 收藏";
+            display_text_16((DISP_FB_W - display_text_width_16(hint)) / 2,
+                            119, hint, C_UI_FG_FAINT);
+        }
         for (int row = 0; row < a->row_count; row++) {
             int y = LIST_Y + row * ROW_H;
             bool active = row == a->sel_row;
@@ -259,7 +271,12 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
                             active ? C_UI_FG_INV : C_UI_FG_DIM);
             display_text_16(46, y, a->lines[row],
                             active ? C_UI_FG_INV : C_UI_FG);
-            if (active) display_text_16(DISP_FB_W - 17, y, ">", C_UI_FG_INV);
+            if (a->favorites[row]) {
+                display_text_16(DISP_FB_W - 25, y, "★",
+                                active ? C_UI_FG_INV : C_UI_GOLD);
+            } else if (active) {
+                display_text_16(DISP_FB_W - 17, y, ">", C_UI_FG_INV);
+            }
         }
     }
 
@@ -273,7 +290,7 @@ static void draw_strip(uint16_t *strip, int y0, int h, void *ctx)
  *
  * 故意不记录「起始下标 + 长度」：那等于把「同平台条目在 rom_store 里连续」
  * 变成硬约束。目前 pack_roms.py 确实按 system 排过序，但没必要让菜单依赖它
- * ——下面 nth_of_system() 每次线性扫描，条目只有几十个，省下的复杂度更值。 */
+ * ——下面 nth_of_category() 只读内存目录，收藏同样不碰 ROM 内容。 */
 static int build_categories(int count, category_t *out, int max)
 {
     int n = 0;
@@ -284,9 +301,10 @@ static int build_categories(int count, category_t *out, int max)
         int k = 0;
         while (k < n && out[k].system != e->system) k++;
         if (k == n) {
-            if (n >= max) continue;     /* 不该发生：枚举就五个取值 */
+            if (n >= max) continue;     /* 不该发生：枚举就六个取值 */
             out[n].system = e->system;
             out[n].count  = 0;
+            out[n].favorites = false;
             n++;
         }
         out[k].count++;
@@ -294,22 +312,35 @@ static int build_categories(int count, category_t *out, int max)
     return n;
 }
 
-/* 平台 system 的第 j 个游戏在 rom_store 里的下标；没有就返回 -1。 */
-static int nth_of_system(int count, rom_system_t system, int j)
+/* 收藏只匹配当前目录中的游戏；拔掉的文件不会显示，但收藏记录仍保留，
+ * 下次同路径放回即可恢复。普通平台与收藏共用定位，启动不会串到别的游戏。 */
+static int nth_of_category(int count, const category_t *cat, int j)
 {
     for (int i = 0; i < count; i++) {
         const rom_store_entry_t *e = rom_store_entry(i);
         if (!e) break;
-        if (e->system == system && j-- == 0) return i;
+        bool matches = cat->favorites ? rom_favorites_contains(e)
+                                      : e->system == cat->system;
+        if (matches && j-- == 0) return i;
     }
     return -1;
 }
 
-static void draw_categories(const category_t *cats, int cat_count, int sel)
+static int count_favorites(int count)
+{
+    int favorites = 0;
+    for (int i = 0; i < count; i++) {
+        if (rom_favorites_contains(rom_store_entry(i))) favorites++;
+    }
+    return favorites;
+}
+
+static void draw_categories(const category_t *cats, int cat_count, int sel,
+                            int favorite_count, const char *status)
 {
     draw_args_t a = {
         .title       = "选择游戏平台",
-        .footer      = "方向选择  A进入  B返回",
+        .footer      = status ? status : "A进入 B返回 SELECT收藏",
         .category_grid = true,
         .page        = 0,
         .page_count  = 1,
@@ -323,11 +354,22 @@ static void draw_categories(const category_t *cats, int cat_count, int sel)
         a.counts[i] = cats[i].count;
         total += cats[i].count;
     }
-    snprintf(a.meta, sizeof(a.meta), "%d GAMES", total);
+    snprintf(a.meta, sizeof(a.meta), "%d款 收藏%d", total, favorite_count);
     display_stream_sync(draw_strip, &a);
 }
 
-static void draw_games(int count, const category_t *cat, int sel)
+/* 游戏名要在星标前结束；按完整 UTF-8 字符收短，避免中文半个字变成问号。
+ * 必须在菜单任务里处理，条带回调只接收已经裁好的文本。 */
+static void fit_game_line(char *line)
+{
+    size_t len = strlen(line);
+    while (len && display_text_width_16(line) > DISP_FB_W - 32 - 46) {
+        do { len--; } while (len && ((unsigned char)line[len] & 0xc0) == 0x80);
+        line[len] = '\0';
+    }
+}
+
+static void draw_games(int count, const category_t *cat, int sel, const char *status)
 {
     int page = sel / PAGE_ROWS;
     int first = page * PAGE_ROWS;
@@ -336,20 +378,26 @@ static void draw_games(int count, const category_t *cat, int sel)
 
     draw_args_t a = {
         /* 标题就是平台名，所以行里不再重复画平台徽标，省下的宽度给名字。 */
-        .title       = system_name(cat->system),
-        .footer      = "A开始 B返回 左右翻页",
+        .title       = cat->favorites ? "我的收藏" : system_name(cat->system),
+        .footer      = "A开始 B返回 X收藏 左右翻页",
         .category_grid = false,
         .page        = page,
         .page_count  = (cat->count + PAGE_ROWS - 1) / PAGE_ROWS,
         .sel_row     = sel - first,
         .row_count   = last - first,
         .first_number = first + 1,
+        .empty_text = cat->count == 0 ? "暂无可用收藏" : NULL,
     };
-    snprintf(a.meta, sizeof(a.meta), "%d GAMES  %d/%d", cat->count,
-             page + 1, a.page_count);
+    if (cat->count) {
+        snprintf(a.meta, sizeof(a.meta), "%d GAMES %d/%d", cat->count,
+                 page + 1, a.page_count);
+    } else {
+        snprintf(a.meta, sizeof(a.meta), "0 GAMES");
+        a.footer = "B返回平台";
+    }
 
     for (int j = first; j < last; j++) {
-        int i = nth_of_system(count, cat->system, j);
+        int i = nth_of_category(count, cat, j);
         const rom_store_entry_t *e = i >= 0 ? rom_store_entry(i) : NULL;
         if (!e) break;
 
@@ -360,8 +408,19 @@ static void draw_games(int count, const category_t *cat, int sel)
          * 编号是平台内序号，每个平台都从 01 起；翻页后继续递增，不能接着
          * 全局目录编号一路数，否则看不出这是该平台里的第几个。 */
         char *line = a.lines[j - first];
-        snprintf(line, sizeof(a.lines[0]), "%s", e->name);
+        if (cat->favorites) {
+            snprintf(line, sizeof(a.lines[0]), "[%s] %s", system_name(e->system),
+                     e->name);
+        } else {
+            snprintf(line, sizeof(a.lines[0]), "%s", e->name);
+        }
+        fit_game_line(line);
+        a.favorites[j - first] = rom_favorites_contains(e);
     }
+    if (cat->count && a.favorites[a.sel_row]) {
+        a.footer = "A开始 B返回 X取消 左右翻页";
+    }
+    if (status) a.footer = status;
     display_stream_sync(draw_strip, &a);
 }
 
@@ -380,6 +439,10 @@ rom_menu_result_t rom_menu_pick(const rom_store_entry_t **entry)
         return ROM_MENU_FALLBACK;
     }
 
+    esp_err_t favorite_error = rom_favorites_init();
+    category_t favorites = { .favorites = true, .count = count_favorites(count) };
+    const char *status = favorite_error == ESP_OK ? NULL : "收藏读取失败，请重试";
+
     /* 三路输入并存：飞线手柄、USB HID、串口调试键盘。init 都是幂等的，
      * 模拟器启动后再调一次没有副作用。 */
     input_serial_init();
@@ -388,14 +451,17 @@ rom_menu_result_t rom_menu_pick(const rom_store_entry_t **entry)
 
     printf("\n开机选单：%d 个游戏，%d 个平台。\n", count, cat_count);
     printf("方向键选择，A 进入/确认，B 返回上一级。\n");
+    printf("平台页 SELECT（Tab）打开收藏；游戏列表 X（U）收藏/取消。\n");
     printf("（想换游戏按板子上的 RST 重启）\n\n");
 
     int cat = 0;
     int sel[SYSTEM_COUNT] = { 0 };  /* 每个平台各记各的，退出去再进来回原位 */
+    int favorite_sel = 0;
     bool in_games = false;
+    bool in_favorites = false;
 
     uint16_t prev = poll_input();   /* 先读一次当基线：上电时可能有键按着 */
-    draw_categories(cats, cat_count, cat);
+    draw_categories(cats, cat_count, cat, favorites.count, status);
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
@@ -405,6 +471,7 @@ rom_menu_result_t rom_menu_pick(const rom_store_entry_t **entry)
         prev = now;
 
         bool dirty = false;
+        if (edge) status = NULL;
 
         if (!in_games) {
             /* ---- 分类页 ---- */
@@ -413,11 +480,25 @@ rom_menu_result_t rom_menu_pick(const rom_store_entry_t **entry)
              * app_main，不能冒充“没有 ROM”，否则会误启动编译期内置游戏。 */
             if (edge & NES_PAD_B) {
                 ui_sound_back();
+                rom_favorites_deinit();
                 return ROM_MENU_BACK;
+
+            } else if (edge & NES_PAD_SELECT) {
+                ui_sound_enter();
+                in_games = true;
+                in_favorites = true;
+                /* 短暂读卡/内存错误后，重新进入收藏就能重试，不必先重启机器。 */
+                if (favorite_error != ESP_OK) {
+                    favorite_error = rom_favorites_init();
+                    favorites.count = count_favorites(count);
+                }
+                if (favorite_error != ESP_OK) status = "收藏读取失败，请重试";
+                dirty = true;
 
             } else if (edge & (NES_PAD_A | NES_PAD_START)) {
                 ui_sound_enter();
                 in_games = true;
+                in_favorites = false;
                 dirty = true;
 
             } else if (edge & (NES_PAD_LEFT | NES_PAD_RIGHT)) {
@@ -446,7 +527,8 @@ rom_menu_result_t rom_menu_pick(const rom_store_entry_t **entry)
 
         } else {
             /* ---- 游戏列表 ---- */
-            const category_t *c = &cats[cat];
+            const category_t *c = in_favorites ? &favorites : &cats[cat];
+            int *selected = in_favorites ? &favorite_sel : &sel[cat];
             int page_count = (c->count + PAGE_ROWS - 1) / PAGE_ROWS;
 
             if (edge & NES_PAD_B) {
@@ -454,9 +536,44 @@ rom_menu_result_t rom_menu_pick(const rom_store_entry_t **entry)
                 in_games = false;
                 dirty = true;
 
-            } else if (edge & (NES_PAD_A | NES_PAD_START)) {
+            } else if (c->count > 0 && (edge & GAMEPAD_BIT_X)) {
+                int i = nth_of_category(count, c, *selected);
+                const rom_store_entry_t *e = i >= 0 ? rom_store_entry(i) : NULL;
+                if (e) {
+                    /* 慢卡的写入可能超过一帧，先给出反馈；落盘成功才让星标改变。 */
+                    draw_games(count, c, *selected, "正在保存收藏");
+                    if (favorite_error != ESP_OK) {
+                        favorite_error = rom_favorites_init();
+                        favorites.count = count_favorites(count);
+                    }
+                    esp_err_t err = favorite_error == ESP_OK
+                                  ? rom_favorites_toggle(e) : favorite_error;
+                    if (err == ESP_OK) {
+                        favorite_error = ESP_OK;
+                        bool added = rom_favorites_contains(e);
+                        status = added ? "已收藏" : "已取消收藏";
+                        if (added) ui_sound_enter();
+                        else       ui_sound_back();
+                        favorites.count = count_favorites(count);
+                        /* 删除当前行后跟随下一项；删掉末项则退一格。空列表保留在
+                         * 收藏页，不能取模 0，也不能意外启动内置游戏。 */
+                        if (favorite_sel >= favorites.count) {
+                            favorite_sel = favorites.count > 0 ? favorites.count - 1 : 0;
+                        }
+                        ESP_LOGI(TAG, "%s：[%s] %s（当前目录收藏 %d）", status,
+                                 system_name(e->system), e->name, favorites.count);
+                    } else {
+                        status = "收藏保存失败，请重试";
+                        ESP_LOGW(TAG, "收藏保存失败：%s", esp_err_to_name(err));
+                    }
+                    /* 把写卡期间仍按住的键纳入基线，避免返回后立即重复收藏。 */
+                    prev = poll_input();
+                    dirty = true;
+                }
+
+            } else if (c->count > 0 && (edge & (NES_PAD_A | NES_PAD_START))) {
                 ui_sound_enter();
-                int i = nth_of_system(count, c->system, sel[cat]);
+                int i = nth_of_category(count, c, *selected);
                 const rom_store_entry_t *e = i >= 0 ? rom_store_entry(i) : NULL;
                 if (e) {
                     *entry = e;
@@ -468,6 +585,7 @@ rom_menu_result_t rom_menu_pick(const rom_store_entry_t **entry)
                                system_name(e->system), e->name,
                                (unsigned)(e->size / 1024), e->path);
                     }
+                    rom_favorites_deinit();
                     return ROM_MENU_SELECTED;
                 }
 
@@ -483,13 +601,13 @@ rom_menu_result_t rom_menu_pick(const rom_store_entry_t **entry)
                  * 吃掉——整个列表看着就像按键失灵。分平台之前列表是 31 个游戏
                  * 铺 4 页，翻页总有事可做所以没暴露；拆成平台之后 GB/GBC/SNES
                  * 都只有一页，全都中招。 */
-                int page = sel[cat] / PAGE_ROWS;
-                int row = sel[cat] % PAGE_ROWS;
+                int page = *selected / PAGE_ROWS;
+                int row = *selected % PAGE_ROWS;
                 int page_delta = (edge & NES_PAD_LEFT) ? -1 : +1;
 
                 page = (page + page_delta + page_count) % page_count;
-                sel[cat] = page * PAGE_ROWS + row;
-                if (sel[cat] >= c->count) sel[cat] = c->count - 1;
+                *selected = page * PAGE_ROWS + row;
+                if (*selected >= c->count) *selected = c->count - 1;
                 dirty = true;
 
             } else {
@@ -497,8 +615,8 @@ rom_menu_result_t rom_menu_pick(const rom_store_entry_t **entry)
                 int moved = 0;
                 if (edge & NES_PAD_UP)   moved = -1;
                 if (edge & NES_PAD_DOWN) moved = +1;
-                if (moved) {
-                    sel[cat] = (sel[cat] + moved + c->count) % c->count;
+                if (moved && c->count > 0) {
+                    *selected = (*selected + moved + c->count) % c->count;
                     dirty = true;
                 }
             }
@@ -506,8 +624,12 @@ rom_menu_result_t rom_menu_pick(const rom_store_entry_t **entry)
 
         /* 统一在这里重画：省得每个分支各写一遍，还要各自挑对是哪一页。 */
         if (dirty) {
-            if (in_games) draw_games(count, &cats[cat], sel[cat]);
-            else          draw_categories(cats, cat_count, cat);
+            if (in_games) {
+                draw_games(count, in_favorites ? &favorites : &cats[cat],
+                           in_favorites ? favorite_sel : sel[cat], status);
+            } else {
+                draw_categories(cats, cat_count, cat, favorites.count, status);
+            }
         }
     }
 }
