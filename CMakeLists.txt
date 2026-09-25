@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 # 项目版本只在这里维护。ESP-IDF 会把它写进 app descriptor，运行时的串口和
 # 开机界面都从 descriptor 读取，避免出现几份手写版本号各自漂移。
-set(PROJECT_VER "1.0.0")
+set(PROJECT_VER "1.0.1")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(esp32s3-gamebox)
